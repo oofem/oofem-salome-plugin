@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Module>
+  <Name>OOFEMSalomePlugin</Name>
+  <Components>
+    <Component>
+      <Name>OOFEM</Name>
+      <Class>OOFEMSalomePlugin.OOFEMModule</Class>
+      <Icon>icons/oofem.png</Icon>
+    </Component>
+  </Components>
+</Module>

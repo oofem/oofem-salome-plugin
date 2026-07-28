@@ -1,0 +1,30 @@
+{
+  "materials": [
+    {
+      "oofem_name": "ElasticIsotropic3d",
+      "display_name": "3D Isotropic Elastic",
+      "params": [
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
+        {"key": "d", "name": "Damping Coeff", "type": "float", "default": 0.0, "description": "Optional mass proportional damping coefficient.", "optional": true}
+      ]
+    },
+    {
+      "oofem_name": "ElasticIsotropic2d",
+      "display_name": "2D Isotropic Elastic (Plane Stress)",
+      "params": [
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
+        {"key": "t", "name": "Thickness", "type": "float", "default": 0.01, "description": "The out-of-plane thickness for plane stress elements. Units: m"}
+      ]
+    },
+    {
+      "oofem_name": "Truss",
+      "display_name": "1D Truss",
+      "params": [
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
+        {"key": "A", "name": "Cross-section Area", "type": "float", "default": 0.01, "description": "The area of the truss cross-section. Units: m^2"}
+      ]
+    }
+  ]
+}

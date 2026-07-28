@@ -1,0 +1,3 @@
+<module name="OOFEMSalomePlugin" gui="OOFEMModule" icon="oofem.png">
+    <menu name="OOFEM"/>
+</module>

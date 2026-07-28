@@ -1,0 +1,57 @@
+import importlib
+m = importlib.import_module("OOFEMSalomePlugin.OOFEMModule")
+print("OK", hasattr(m, "getModule"))
+
+m = importlib.import_module("OOFEMSalomePlugin.OOFEMModule")
+mod = m.getModule()
+mod.activate()
+
+mod.dock.mainWidget.meshCombo
+
+## In Salome 9.15 (and 9.16), the SMESH CORBA server is not fully activated until you switch modules.
+
+import salome
+
+entry = "0:1:2:6"
+
+mesh = salome.IDToObject(entry)
+
+print("Mesh:", mesh.GetName())
+print("Nodes:", mesh.NbNodes())
+print("Elements:", mesh.NbElements())
+
+groups = mesh.GetGroups()
+for g in groups:
+    print("Group:", g.GetName(), "Entry:", salome.ObjectToID(g))
+
+    node_ids = g.GetIDs()
+    print("Node IDs:", node_ids)
+
+    elem_ids = g.GetElementIDs()
+    print("Element IDs:", elem_ids)
+
+
+
+
+
+import salome.smesh.smeshstudytools as st
+tools = st.SMeshStudyTools()
+mesh_obj = tools.getMeshObjectSelected()
+if (mesh_obj):
+    print("Selected mesh name:", mesh_obj.GetName())
+
+## INSTALL
+* copy /devel/oofem-salome-plugin.git/src/OOFEMSalomePlugin to C:\SALOME-9.15.0\W64\KERNEL\lib\python3.9\site-packages\salome
+
+## TODO
+* have sections materials, cross sections, boundary conditions, analyses
+* for (materials, cross sections, boundary conditions) 
+    * add item from the list
+    * set item properties (based on item type template)   
+    * associate it with the mesh group
+* for each element group (or material group) in the mesh_obj
+    * define oofem element type mapping (salome cell -> oofem element type) 
+
+* export 
+    * export mesh (nodes,elements, groups (as sets))
+

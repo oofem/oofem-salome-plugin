@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module name="OOFEMSalomePlugin"
+        library="OOFEMSalomePluginGUI"
+        version="1.0"
+        enabled="true"
+        auto_load="false">
+  <description>OOFEM integration for Salome</description>
+  <menu>
+    <menu-item name="Activate OOFEM Module"
+               command="activate"
+               group="oofem_group" />
+  </menu>
+  <menu-bar>
+    <menu-group name="oofem_group" text="OOFEM" />
+  </menu-bar>
+</module>
