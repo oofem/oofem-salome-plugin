@@ -21,6 +21,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.study = None
         self.state = {}
         self.material_templates = []
+        self.analysis_templates = []
         self.bc_templates = []
         self._block_signals = False
 
@@ -42,7 +43,28 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs)
 
-        # Tab 1: Element Mapping
+        # Tab 1: Analysis
+        analysis_tab = QtWidgets.QWidget()
+        analysis_layout = QtWidgets.QVBoxLayout(analysis_tab)
+        analysis_form_layout = QtWidgets.QFormLayout()
+        self.analysisTypeCombo = QtWidgets.QComboBox()
+        self.analysisTypeCombo.currentIndexChanged.connect(self.onAnalysisTypeChanged)
+        analysis_form_layout.addRow("Analysis Type:", self.analysisTypeCombo)
+        analysis_layout.addLayout(analysis_form_layout)
+
+        analysis_props_group = QtWidgets.QGroupBox("Analysis Parameters")
+        analysis_props_layout = QtWidgets.QVBoxLayout(analysis_props_group)
+        self.analysisPropsTable = QtWidgets.QTableWidget()
+        self.analysisPropsTable.setColumnCount(2)
+        self.analysisPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self.analysisPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.analysisPropsTable.cellChanged.connect(self.onAnalysisPropertyChanged)
+        analysis_props_layout.addWidget(self.analysisPropsTable)
+        analysis_layout.addWidget(analysis_props_group)
+        analysis_layout.addStretch()
+        self.tabs.addTab(analysis_tab, "Analysis")
+
+        # Tab 2: Element Mapping
         elem_tab = QtWidgets.QWidget()
         elem_layout = QtWidgets.QVBoxLayout(elem_tab)
         self.elemTable = QtWidgets.QTableWidget()
@@ -51,7 +73,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         elem_layout.addWidget(self.elemTable)
         self.tabs.addTab(elem_tab, "Element Mapping")
 
-        # Tab 2: Materials
+        # Tab 3: Materials
         mat_tab = QtWidgets.QWidget()
         mat_layout = QtWidgets.QVBoxLayout(mat_tab)
         
@@ -89,7 +111,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         mat_layout.addStretch()
         self.tabs.addTab(mat_tab, "Materials")
 
-        # Tab 3: Boundary Conditions
+        # Tab 4: Boundary Conditions
         bc_tab = QtWidgets.QWidget()
         bc_layout = QtWidgets.QVBoxLayout(bc_tab)
 
@@ -137,6 +159,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         layout.addLayout(bottom_layout)
 
         self.setLayout(layout)
+
+    def loadAnalysisTemplates(self):
+        """Loads analysis definitions from the JSON file."""
+        try:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            json_path = os.path.join(plugin_dir, "OOFEMAnalyses.json")
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                self.analysis_templates = data.get("analyses", [])
+        except Exception as e:
+            print(f"Error loading analysis templates: {e}")
+            self.analysis_templates = []
 
     def loadMaterialTemplates(self):
         """Loads material definitions from the JSON file."""
@@ -208,12 +242,20 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["element_mapping"] = DEFAULT_ELEMENT_MAP.copy()
         if "materials" not in self.state:
             self.state["materials"] = []
+        if "analysis" not in self.state:
+            # Set a default analysis if none is defined
+            self.state["analysis"] = {
+                "oofem_type": "StaticStructural",
+                "params": {"nsteps": 1}
+            }
         if "bcs" not in self.state:
             self.state["bcs"] = []
 
+        self.loadAnalysisTemplates()
         self.loadMaterialTemplates()
         self.loadBCTemplates()
         self.populateMeshes()
+        self.populateAnalysis()
         self.populateElementMapping()
         self.populateMaterials()
         self.populateBCs()
@@ -273,6 +315,87 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.elemTable.insertRow(row)
             self.elemTable.setItem(row, 0, QtWidgets.QTableWidgetItem(salome_type))
             self.elemTable.setItem(row, 1, QtWidgets.QTableWidgetItem(oofem_type))
+            
+    # ---------------------------
+    # Analysis
+    # ---------------------------
+    def populateAnalysis(self):
+        """Populates the analysis selection UI."""
+        self._block_signals = True
+        self.analysisTypeCombo.clear()
+        self.analysisTypeCombo.addItems([t['display_name'] for t in self.analysis_templates])
+
+        current_type = self.state.get("analysis", {}).get("oofem_type")
+        if current_type:
+            idx = next((i for i, t in enumerate(self.analysis_templates) if t['oofem_name'] == current_type), -1)
+            if idx != -1:
+                self.analysisTypeCombo.setCurrentIndex(idx)
+        
+        self._block_signals = False
+        self.populateAnalysisDetails()
+
+    def populateAnalysisDetails(self):
+        """Populates the property editor for the selected analysis."""
+        self._block_signals = True
+        self.analysisPropsTable.setRowCount(0)
+
+        selected_index = self.analysisTypeCombo.currentIndex()
+        if selected_index < 0 or not self.analysis_templates:
+            self._block_signals = False
+            return
+
+        template = self.analysis_templates[selected_index]
+        analysis_data = self.state.get("analysis", {})
+        current_params = analysis_data.get("params", {})
+
+        for param_def in template.get("params", []):
+            row = self.analysisPropsTable.rowCount()
+            self.analysisPropsTable.insertRow(row)
+            
+            is_optional = param_def.get("optional", False)
+            display_name = param_def['name']
+            if is_optional:
+                display_name += " (optional)"
+
+            name_item = QtWidgets.QTableWidgetItem(display_name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setData(Qt.UserRole, param_def['key'])
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
+            name_item.setData(Qt.UserRole + 2, is_optional)
+            
+            value = current_params.get(param_def['key'], param_def.get('default', ''))
+            value_item = QtWidgets.QTableWidgetItem(str(value))
+
+            description = param_def.get("description")
+            if description:
+                name_item.setToolTip(description)
+                value_item.setToolTip(description)
+
+            self.analysisPropsTable.setItem(row, 0, name_item)
+            self.analysisPropsTable.setItem(row, 1, value_item)
+        
+        self._block_signals = False
+
+    def onAnalysisTypeChanged(self, index):
+        """Updates state when a new analysis type is selected."""
+        if self._block_signals or index < 0:
+            return
+
+        template = self.analysis_templates[index]
+        new_type = template['oofem_name']
+        
+        # Create new params dict with defaults from template
+        new_params = {}
+        for p in template.get('params', []):
+            if 'default' in p:
+                new_params[p['key']] = p['default']
+
+        self.state['analysis'] = {
+            'oofem_type': new_type,
+            'params': new_params
+        }
+        
+        self.populateAnalysisDetails()
             
     # ---------------------------
     # Materials
@@ -477,6 +600,41 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.state['bcs'] = [m for m in self.state['bcs'] if m.get('id') != bc_id]
         self.populateBCs()
 
+    def onAnalysisPropertyChanged(self, row, column):
+        """Updates the state when an analysis property value is changed."""
+        if self._block_signals or column != 1:
+            return
+
+        analysis_data = self.state.get('analysis')
+        if not analysis_data: return
+
+        key_item = self.analysisPropsTable.item(row, 0)
+        value_item = self.analysisPropsTable.item(row, 1)
+        param_key = key_item.data(Qt.UserRole)
+        param_type = key_item.data(Qt.UserRole + 1)
+        is_optional = key_item.data(Qt.UserRole + 2)
+        value_text = value_item.text().strip()
+
+        if is_optional and not value_text:
+            if param_key in analysis_data['params']:
+                del analysis_data['params'][param_key]
+            return
+
+        new_value = None
+        try:
+            if param_type == 'float':
+                new_value = float(value_text)
+            elif param_type == 'int':
+                new_value = int(value_text)
+            elif param_type == 'string':
+                new_value = str(value_text)
+            else:
+                new_value = str(value_text)
+        except ValueError:
+            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
+            return
+        analysis_data['params'][param_key] = new_value
+
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
         if self._block_signals or column != 1:
@@ -563,7 +721,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             # Optionally, provide feedback to the user about the invalid input
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             # Revert the change in the UI? For now, we just don't save it.
-        return
+            return
         mat_data['params'][param_key] = new_value
 
     # ---------------------------
@@ -626,7 +784,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 self.state.get("element_mapping", {}),
                 self.state.get("materials", []),
                 self.state.get("bcs", []),
-                self.bc_templates
+                self.bc_templates,
+                self.state.get("analysis", {})
             )
             exporter.export(filename)
 

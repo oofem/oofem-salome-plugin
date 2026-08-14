@@ -12,12 +12,13 @@ from OOFEMSalomePlugin.OOFEMModule import getModule
 
 
 class OOFEMExporter:
-    def __init__(self, mesh, elem_map, mat_map, bc_map, bc_templates):
+    def __init__(self, mesh, elem_map, mat_map, bc_map, bc_templates, analysis_data):
         self.mesh = mesh
         self.elem_map = elem_map
         self.mat_map = mat_map
         self.bc_map = bc_map
         self.bc_templates = {t['oofem_name']: t for t in bc_templates}
+        self.analysis_data = analysis_data
         self.debug_console = None
         self.SALOME_TYPE_NAMES = self._build_salome_type_map()
 
@@ -394,18 +395,38 @@ class OOFEMExporter:
             nnodes = len(conn)
             f.write(f"{oofem_type} {eid} nodes {nnodes} {conn_str}\n")
 
+    def _export_analysis(self, f):
+        if not self.analysis_data:
+            self._log("Warning: No analysis data provided. Writing default analysis.")
+            f.write("StaticStructural nsteps 1\n")
+            return
+
+        analysis_type = self.analysis_data.get('oofem_type')
+        params = self.analysis_data.get('params', {})
+
+        if not analysis_type:
+            self._log("Warning: Analysis type not specified. Writing default analysis.")
+            f.write("StaticStructural nsteps 1\n")
+            return
+
+        params_str = " ".join([f"{key} {value}" for key, value in params.items()])
+        f.write(f"{analysis_type} {params_str}\n")
+
     def export(self, filename):
         self._log(f"--- Starting OOFEM Export to {filename} ---")
         try:
             with open(filename, "w") as f:
-                f.write("problem Structural nsteps 1\n")
-                f.write("domain 1\n")
+                f.write("problem.out\n");
+                f.write("Problem description; created by OOFEM Salome Plugin\n")
+                self._export_analysis(f)
+                f.write("domain 3d\n")
                 self._export_nodes(f)
-                self._export_sets(f)
-                self._export_materials(f)
-                self._export_cross_sections(f)
-                self._export_boundary_conditions(f)
                 self._export_elements(f)
+                self._export_cross_sections(f)
+                self._export_materials(f)
+                self._export_boundary_conditions(f)
+                self._export_sets(f)
+                
             self._log(f"--- Export to {filename} finished successfully. ---")
         except Exception as e:
             self._log(f"!!! EXPORT FAILED: {e} !!!")

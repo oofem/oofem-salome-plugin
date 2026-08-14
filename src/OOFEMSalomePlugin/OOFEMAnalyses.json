@@ -1,0 +1,61 @@
+{
+  "analyses": [
+    {
+      "oofem_name": "StaticStructural",
+      "display_name": "Static Structural",
+      "description": "Nonlinear static structural analysis.",
+      "params": [
+        {
+          "key": "nsteps",
+          "name": "Number of Steps",
+          "type": "int",
+          "default": 1,
+          "description": "Number of solution steps (load increments)."
+        },
+        {
+          "key": "deltat",
+          "name": "Time Step",
+          "type": "float",
+          "default": 1.0,
+          "optional": true,
+          "description": "Length of time step."
+        }
+      ]
+    },
+    {
+      "oofem_name": "LinearStatics",
+      "display_name": "Linear Statics",
+      "description": "Linear static analysis with multiple load cases.",
+      "params": [
+        {
+          "key": "nsteps",
+          "name": "Number of Load Cases",
+          "type": "int",
+          "default": 1,
+          "description": "Number of load cases to solve."
+        }
+      ]
+    },
+    {
+      "oofem_name": "EigenValueDynamic",
+      "display_name": "Eigenvalue Dynamic",
+      "description": "Computes eigenvalues and eigenvectors.",
+      "params": [
+        {
+          "key": "nroot",
+          "name": "Number of Eigenvalues",
+          "type": "int",
+          "default": 5,
+          "description": "Number of smallest eigenvalues to compute."
+        },
+        {
+          "key": "rtolv",
+          "name": "Relative Tolerance",
+          "type": "float",
+          "default": 1e-6,
+          "description": "Relative convergence tolerance."
+        }
+      ]
+    }
+  ]
+}
