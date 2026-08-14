@@ -55,3 +55,5 @@ if (mesh_obj):
 * export 
     * export mesh (nodes,elements, groups (as sets))
 
+## get access to module in Salome python interpreter
+mod.dock.mainWidget.__dict__
