@@ -70,7 +70,7 @@ Copy the folder:
 
 `src\OOFEMSalomePlugin\`
 into:
-`C:\SALOME-9.15.0\WORK\salome\modules\OOFEMSalomePlugin\`
+`C:\SALOME-9.15.0\W64\KERNEL\lib\python3.9\site-packages\salome`
 
 ### 3. Restart Salome
 Note: In Salome 9.15 (and 9.16), the SMESH CORBA server is not fully activated until you switch modules. Do this before activating oofem module.
