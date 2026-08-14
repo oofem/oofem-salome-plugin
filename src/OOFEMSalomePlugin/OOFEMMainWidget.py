@@ -160,6 +160,34 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
+    def _format_param_value(self, value):
+        """Formats a parameter value for display in the UI."""
+        if isinstance(value, list):
+            return " ".join(map(str, value))
+        return str(value)
+
+    def _parse_param_value(self, value_text, param_type):
+        """Parses a string value from a property table into the correct Python type."""
+        value_text = value_text.strip()
+
+        if param_type == 'float':
+            return float(value_text)
+        elif param_type == 'int':
+            return int(value_text)
+        elif param_type == 'string':
+            return str(value_text)
+        elif param_type == 'intarray':
+            # Handles space or comma separated values
+            if not value_text: return []
+            return [int(v) for v in value_text.replace(',', ' ').split()]
+        elif param_type == 'floatarray':
+            # Handles space or comma separated values
+            if not value_text: return []
+            return [float(v) for v in value_text.replace(',', ' ').split()]
+        else:
+            # Default to string if type is unknown
+            return str(value_text)
+
     def loadAnalysisTemplates(self):
         """Loads analysis definitions from the JSON file."""
         try:
@@ -364,7 +392,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             name_item.setData(Qt.UserRole + 2, is_optional)
             
             value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(str(value))
+            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
 
             description = param_def.get("description")
             if description:
@@ -455,11 +483,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             name_item.setData(Qt.UserRole, param_def['key']) # Store key (e.g., "E")
             # Store the expected data type for later conversion. Default to 'float' for backward compatibility.
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'float'))
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
             
-            value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(str(value))
             name_item.setData(Qt.UserRole + 2, is_optional)
+            value = current_params.get(param_def['key'], param_def.get('default', ''))
+            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
 
             # Set tooltip if a description is available in the template
             description = param_def.get("description")
@@ -556,11 +584,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             name_item = QtWidgets.QTableWidgetItem(display_name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             name_item.setData(Qt.UserRole, param_def['key'])
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'float'))
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
             name_item.setData(Qt.UserRole + 2, is_optional)
             
             value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(str(value))
+            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
 
             description = param_def.get("description")
             if description:
@@ -620,17 +648,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 del analysis_data['params'][param_key]
             return
 
-        new_value = None
         try:
-            if param_type == 'float':
-                new_value = float(value_text)
-            elif param_type == 'int':
-                new_value = int(value_text)
-            elif param_type == 'string':
-                new_value = str(value_text)
-            else:
-                new_value = str(value_text)
-        except ValueError:
+            new_value = self._parse_param_value(value_text, param_type)
+        except (ValueError, TypeError):
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         analysis_data['params'][param_key] = new_value
@@ -659,17 +679,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 del bc_data['params'][param_key]
             return
 
-        new_value = None
         try:
-            if param_type == 'float':
-                new_value = float(value_text)
-            elif param_type == 'int':
-                new_value = int(value_text)
-            elif param_type == 'string':
-                new_value = str(value_text)
-            else:
-                new_value = str(value_text)
-        except ValueError:
+            new_value = self._parse_param_value(value_text, param_type)
+        except (ValueError, TypeError):
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         bc_data['params'][param_key] = new_value
@@ -705,22 +717,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 print(f"INFO: Optional parameter '{param_key}' was removed.")
             return
 
-        new_value = None
         try:
-            if param_type == 'float':
-                new_value = float(value_text)
-            elif param_type == 'int':
-                new_value = int(value_text)
-            elif param_type == 'string':
-                new_value = str(value_text)
-            # Future types like 'bool' or choice lists can be added here.
-            else:
-                # Default to string if type is unknown or not specified
-                new_value = str(value_text)
-        except ValueError:
-            # Optionally, provide feedback to the user about the invalid input
+            new_value = self._parse_param_value(value_text, param_type)
+        except (ValueError, TypeError):
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
-            # Revert the change in the UI? For now, we just don't save it.
             return
         mat_data['params'][param_key] = new_value
 

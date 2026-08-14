@@ -35,8 +35,8 @@ class OOFEMExporter:
         # Maps for tracking exported entities
         self.group_name_to_set_id = {}
         self.mat_internal_id_to_oofem_id = {}
-        # A map from a canonical node tuple of a face to (element_id, local_face_index)
-        self.face_to_parent_map = self._build_face_to_parent_map()
+        # A map from a canonical node tuple of a boundary (face/edge) to (element_id, local_side_index)
+        self.boundary_to_parent_map = self._build_boundary_to_parent_map()
 
         self.group_to_cs_id = {}
 
@@ -46,6 +46,14 @@ class OOFEMExporter:
             self.debug_console.log(msg)
         else:
             print(f"OOFEMExporter log: {msg}")
+
+    def _format_oofem_param(self, value):
+        """Formats a parameter value for the OOFEM input file."""
+        if isinstance(value, list):
+            # Format is: n v1 v2 v3 ...
+            return f"{len(value)} {' '.join(map(str, value))}"
+        # For other types, just convert to string
+        return str(value)
 
     def _build_salome_type_map(self):
         """
@@ -100,32 +108,87 @@ class OOFEMExporter:
         self._log(f"Mapped {len(elem_to_groups)} elements to material groups.")
         return elem_to_groups
 
-    def _build_face_to_parent_map(self):
+    def _build_boundary_to_parent_map(self):
         """
-        Builds a map from a canonical representation of a face (a sorted tuple of its node IDs)
-        to a list of parent elements and local face indices: { (n1, n2, ...): [(elem_id, local_face_idx), ...], ... }
-        OOFEM local face indices are 1-based.
+        Builds a map from a canonical representation of a boundary entity (face or edge)
+        to a list of parent elements and local indices: { (n1, n2, ...): [(elem_id, local_idx), ...], ... }
+        For 3D elements, boundaries are faces and edges. For 2D, they are edges.
+        OOFEM local indices are 1-based. It's assumed faces are numbered first, then edges.
         """
-        self._log("Building face-to-parent-element map...")
-        face_map = {}
+        self._log("Building boundary-to-parent-element map...")
+        boundary_map = {}
         all_element_ids = self.mesh.GetElementsId()
+
+        TWOD_TYPES = ["Triangle", "Quadrangle", "Polygon"]
+        THREED_TYPES = ["Tetrahedron", "Hexahedron", "Pentahedron", "Pyramid", "Polyhedron"]
+
+        THREED_EDGE_DEFINITIONS = {
+            "Hexahedron": [
+                (0, 1), (1, 2), (2, 3), (3, 0),  # Bottom face
+                (4, 5), (5, 6), (6, 7), (7, 4),  # Top face
+                (0, 4), (1, 5), (2, 6), (3, 7)   # Vertical edges
+            ],
+            "Tetrahedron": [
+                (0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)
+            ],
+            "Pentahedron": [
+                (0, 1), (1, 2), (2, 0),  # Bottom face
+                (3, 4), (4, 5), (5, 3),  # Top face
+                (0, 3), (1, 4), (2, 5)   # Vertical edges
+            ],
+            "Pyramid": [
+                (0, 1), (1, 2), (2, 3), (3, 0),  # Base
+                (0, 4), (1, 4), (2, 4), (3, 4)   # Edges to apex
+            ]
+        }
 
         for eid in all_element_ids:
             try:
-                elem = self.mesh.FindElement(eid)
-                num_faces = elem.GetNumberOfFaces()
-                for i in range(num_faces):
-                    # GetFaceNodes returns a list of node IDs for the i-th face of the element.
-                    face_nodes = elem.GetFaceNodes(i)
-                    if not face_nodes: continue
-                    
-                    key = tuple(sorted(face_nodes))
-                    face_map.setdefault(key, []).append((eid, i + 1)) # OOFEM uses 1-based indexing
-            except Exception:
-                # This can fail for 1D elements which don't have faces. We can ignore this.
-                pass
-        self._log(f"Built map for {len(face_map)} unique faces.")
-        return face_map
+                salome_type_id = self.mesh.GetElementType(eid, True)
+                lookup_key = salome_type_id._v - 1
+                salome_type_name = self.SALOME_TYPE_NAMES.get(lookup_key)
+
+                if salome_type_name in THREED_TYPES:
+                    num_faces = 0
+                    try:
+                        # Process faces of a 3D element
+                        num_faces = self.mesh.ElemNbFaces(eid)
+                        for i in range(num_faces):
+                            face_nodes = self.mesh.GetElemFaceNodes(eid, i)
+                            if face_nodes:
+                                key = tuple(sorted(face_nodes))
+                                boundary_map.setdefault(key, []).append((eid, i + 1))
+                    except Exception:
+                        pass  # Some Salome versions might not support this
+
+                    # Process edges of a 3D element
+                    if salome_type_name in THREED_EDGE_DEFINITIONS:
+                        conn = self.mesh.GetElemNodes(eid)
+                        if conn:
+                            edge_defs = THREED_EDGE_DEFINITIONS[salome_type_name]
+                            for i, edge_node_indices in enumerate(edge_defs):
+                                n1_idx, n2_idx = edge_node_indices
+                                if n1_idx < len(conn) and n2_idx < len(conn):
+                                    n1, n2 = conn[n1_idx], conn[n2_idx]
+                                    key = tuple(sorted((n1, n2)))
+                                    local_edge_index = num_faces + i + 1
+                                    boundary_map.setdefault(key, []).append((eid, local_edge_index))
+
+                elif salome_type_name in TWOD_TYPES:
+                    conn = self.mesh.GetElemNodes(eid)
+                    if conn:
+                        for i in range(len(conn)):
+                            n1, n2 = conn[i], conn[(i + 1) % len(conn)]
+                            key = tuple(sorted((n1, n2)))
+                            boundary_map.setdefault(key, []).append((eid, i + 1))
+            except Exception as e:
+                self._log(f"Warning: Could not process boundaries for element {eid}. Reason: {e}")
+        
+        self._log(f"Built map for {len(boundary_map)} unique boundary entities (faces and edges).")
+        self._log("Boundary-to-parent-element map sample (first 5 entries):")
+        self._log(list(boundary_map.items())[:5])
+
+        return boundary_map
     def _get_oofem_element_type(self, eid):
         """
         Determines the OOFEM element type for a given Salome element ID.
@@ -191,7 +254,7 @@ class OOFEMExporter:
         if not self.mat_map:
             return
         self._log(f"Exporting {len(self.mat_map)} materials.")
-        f.write("\n# === MATERIALS ===\n")
+        f.write("# === MATERIALS ===\n")
         self.mat_internal_id_to_oofem_id.clear()
         for i, mat_data in enumerate(self.mat_map):
             mat_id = i + 1  # OOFEM uses 1-based indexing
@@ -203,10 +266,11 @@ class OOFEMExporter:
             param_list = []
             for key, value in params.items():
                 param_list.append(str(key))
-                param_list.append(str(value))
+                param_list.append(self._format_oofem_param(value))
 
             params_str = " ".join(param_list)
-            n_params = len(param_list)
+            # n_params should be the count of actual values/words in the final string
+            n_params = len(params_str.split())
 
             f.write(f"material {mat_id} type {oofem_type} n_params {n_params} params {params_str}\n")
 
@@ -216,7 +280,7 @@ class OOFEMExporter:
         if not mesh_groups:
             return
         self._log(f"Exporting {len(mesh_groups)} groups as sets.")
-        f.write(f"\n# === SETS ===\n")
+        f.write(f"# === SETS ===\n")
         set_id_counter = 1
         self.group_name_to_set_id.clear()
         for group in mesh_groups:
@@ -246,7 +310,7 @@ class OOFEMExporter:
     def _export_cross_sections(self, f):
         """Exports cross sections to link materials to element sets."""
         self._log("Exporting cross sections.")
-        f.write("\n# === CROSS SECTIONS ===\n")
+        f.write("# === CROSS SECTIONS ===\n")
         cs_id_counter = 1
         self.group_to_cs_id.clear()
 
@@ -291,7 +355,7 @@ class OOFEMExporter:
         if not self.bc_map:
             return
         self._log(f"Exporting {len(self.bc_map)} boundary conditions.")
-        f.write("\n# === BOUNDARY CONDITIONS ===\n")
+        f.write("# === BOUNDARY CONDITIONS ===\n")
         bc_id_counter = 1
 
         # We need a copy of the set counter because we might create new sets for boundary loads
@@ -336,7 +400,7 @@ class OOFEMExporter:
                         b_nodes_list = self.mesh.GetElemNodes(beid, False)
 
                     b_nodes = tuple(sorted(b_nodes_list))
-                    parent_info = self.face_to_parent_map.get(b_nodes)
+                    parent_info = self.boundary_to_parent_map.get(b_nodes)
 
                     if parent_info:
                         side_list.extend(parent_info)
@@ -353,7 +417,11 @@ class OOFEMExporter:
                 f.write(f"BoundaryCondition {bc_id_counter} type {bc_data['oofem_type']} set {side_set_counter}")
                 side_set_counter += 1
 
-            params = " ".join([f"{k} {v}" for k, v in bc_data.get('params', {}).items()])
+            param_list = []
+            for k, v in bc_data.get('params', {}).items():
+                param_list.append(str(k))
+                param_list.append(self._format_oofem_param(v))
+            params = " ".join(param_list)
             if params:
                 f.write(f" {params}")
             f.write("\n")
@@ -362,7 +430,8 @@ class OOFEMExporter:
         """Exports all nodes to the given file object."""
         nodes = self.mesh.GetNodesId()
         self._log(f"Exporting {len(nodes)} nodes.")
-        f.write(f"nodes {len(nodes)}\n")
+        f.write("# === NODES ===\n")
+        # f.write(f"nodes {len(nodes)}\n")
         for nid in sorted(nodes):
             x, y, z = self.mesh.GetNodeXYZ(nid)
             f.write(f"node {nid} coords 3 {x:g} {y:g} {z:g}\n")
@@ -379,7 +448,8 @@ class OOFEMExporter:
             return
 
         self._log(f"Exporting {len(elems_to_export)} elements (out of {self.mesh.NbElements()} total).")
-        f.write(f"elements {len(elems_to_export)}\n")
+        f.write("# === ELEMENTS ===\n")
+        # f.write(f"elements {len(elems_to_export)}\n")
 
         for eid in sorted(elems_to_export):
             try:
@@ -409,17 +479,67 @@ class OOFEMExporter:
             f.write("StaticStructural nsteps 1\n")
             return
 
-        params_str = " ".join([f"{key} {value}" for key, value in params.items()])
+        param_list = []
+        for key, value in params.items():
+            param_list.append(str(key))
+            param_list.append(self._format_oofem_param(value))
+        params_str = " ".join(param_list)
         f.write(f"{analysis_type} {params_str}\n")
+
+    def _calculate_component_counts(self):
+        """Pre-calculates the number of each component to be exported."""
+        counts = {}
+        
+        counts['ndofman'] = self.mesh.NbNodes()
+        counts['nelem'] = len(self.elem_to_groups)
+        counts['nmat'] = len(self.mat_map)
+        counts['ncrosssect'] = len([m for m in self.mat_map if m.get('assigned_group')])
+        
+        bcs_to_export = [bc for bc in self.bc_map if bc.get('assigned_group')]
+        counts['nbc'] = len(bcs_to_export)
+        
+        # Sets: start with non-empty mesh groups, then add sets created for BCs.
+        num_mesh_sets = len([g for g in self.mesh.GetGroups() if g.GetIDs()])
+        num_bc_sets = 0
+        for bc_data in bcs_to_export:
+            template = self.bc_templates.get(bc_data['oofem_type'])
+            if template and template.get('apply_to') == 'element_boundary':
+                num_bc_sets += 1
+                
+        counts['nset'] = num_mesh_sets + num_bc_sets
+        counts['nic'] = 0  # Not implemented in this exporter
+        
+        self._log(f"Calculated component counts: {counts}")
+        return counts
+
+    def _export_component_sizes(self, f, counts):
+        """Writes the component size records to the file."""
+        f.write("# === COMPONENT SIZES ===\n")
+        # OOFEM keywords are case-sensitive and have a typical order.
+        order = ['ndofman', 'nelem', 'nmat', 'ncrosssect', 'nset', 'nbc', 'nic']
+        for component in order:
+            if component in counts:
+                f.write(f"{component} {counts[component]} ")
+        f.write("\n")
+
 
     def export(self, filename):
         self._log(f"--- Starting OOFEM Export to {filename} ---")
         try:
+            # Pre-calculate counts and determine domain type
+            counts = self._calculate_component_counts()
+            domain_type = '3d'
+
             with open(filename, "w") as f:
-                f.write("problem.out\n");
-                f.write("Problem description; created by OOFEM Salome Plugin\n")
+                f.write("# OOFEM input file generated by OOFEM Salome Plugin\n")
+                f.write("problem.out\n")
+                f.write("Problem description\n")
                 self._export_analysis(f)
-                f.write("domain 3d\n")
+                f.write(f"domain {domain_type}\n")
+                f.write("OutputManager tstep_all dofman_all element_all\n")
+                self._export_component_sizes(f, counts)
+
+                # Correct export order is important for OOFEM
                 self._export_nodes(f)
                 self._export_elements(f)
                 self._export_cross_sections(f)
