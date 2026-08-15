@@ -12,6 +12,7 @@ from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
 from OOFEMSalomePlugin.OOFEMCrossSectionDialog import OOFEMCrossSectionDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
+from OOFEMSalomePlugin.OOFEMTimeFunctionDialog import OOFEMTimeFunctionDialog
 
 
 class OOFEMMainWidget(QtWidgets.QWidget):
@@ -24,6 +25,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.material_templates = []
         self.analysis_templates = []
         self.cs_templates = []
+        self.tf_templates = []
         self.bc_templates = []
         self._block_signals = False
 
@@ -155,6 +157,41 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         cs_layout.addStretch()
         self.tabs.insertTab(3, cs_tab, "Cross Sections") # Insert before BCs
 
+        # Tab 5: Time Functions
+        tf_tab = QtWidgets.QWidget()
+        tf_layout = QtWidgets.QVBoxLayout(tf_tab)
+
+        tf_btn_layout = QtWidgets.QHBoxLayout()
+        self.addTFBtn = QtWidgets.QPushButton("Add")
+        self.addTFBtn.clicked.connect(self.addTimeFunction)
+        self.editTFBtn = QtWidgets.QPushButton("Edit")
+        self.editTFBtn.clicked.connect(self.editTimeFunction)
+        self.removeTFBtn = QtWidgets.QPushButton("Remove")
+        self.removeTFBtn.clicked.connect(self.removeTimeFunction)
+        tf_btn_layout.addWidget(self.addTFBtn)
+        tf_btn_layout.addWidget(self.editTFBtn)
+        tf_btn_layout.addWidget(self.removeTFBtn)
+        tf_btn_layout.addStretch()
+        tf_layout.addLayout(tf_btn_layout)
+
+        self.tfTable = QtWidgets.QTableWidget()
+        self.tfTable.setColumnCount(2)
+        self.tfTable.setHorizontalHeaderLabels(["Name", "Type"])
+        self.tfTable.itemSelectionChanged.connect(self.populateTimeFunctionDetails)
+        self.tfTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.tfTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        tf_layout.addWidget(self.tfTable)
+
+        tf_props_group = QtWidgets.QGroupBox("Time Function Properties (select a function above)")
+        tf_props_layout = QtWidgets.QVBoxLayout(tf_props_group)
+        self.tfPropsTable = QtWidgets.QTableWidget()
+        self.tfPropsTable.setColumnCount(2)
+        self.tfPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self.tfPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.tfPropsTable.cellChanged.connect(self.onTimeFunctionPropertyChanged)
+        tf_props_layout.addWidget(self.tfPropsTable)
+        tf_layout.addWidget(tf_props_group)
+        self.tabs.insertTab(4, tf_tab, "Time Functions")
 
         # Tab 4: Boundary Conditions
         bc_tab = QtWidgets.QWidget()
@@ -164,17 +201,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.addBCBtn = QtWidgets.QPushButton("Add")
         self.addBCBtn.clicked.connect(self.addBC)
         self.editBCBtn = QtWidgets.QPushButton("Edit")
-        # self.editBCBtn.clicked.connect(self.editBC) # Placeholder for future
+        self.editBCBtn.clicked.connect(self.editBC)
         self.removeBCBtn = QtWidgets.QPushButton("Remove")
         self.removeBCBtn.clicked.connect(self.removeBC)
         bc_btn_layout.addWidget(self.addBCBtn)
         bc_btn_layout.addWidget(self.editBCBtn)
         bc_btn_layout.addWidget(self.removeBCBtn)
+        bc_btn_layout.addStretch()
         bc_layout.addLayout(bc_btn_layout)
 
         self.bcTable = QtWidgets.QTableWidget()
-        self.bcTable.setColumnCount(3)
-        self.bcTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group"])
+        self.bcTable.setColumnCount(4)
+        self.bcTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group", "Time Function"])
         self.bcTable.itemSelectionChanged.connect(self.populateBCDetails)
         self.bcTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.bcTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -272,6 +310,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             print(f"Error loading cross section templates: {e}")
             self.cs_templates = []
 
+    def loadTimeFunctionTemplates(self):
+        """Loads time function definitions from the JSON file."""
+        try:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            json_path = os.path.join(plugin_dir, "OOFEMTimeFunctions.json")
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                self.tf_templates = data.get("time_functions", [])
+        except Exception as e:
+            print(f"Error loading time function templates: {e}")
+            self.tf_templates = []
+
     def loadBCTemplates(self):
         """Loads boundary condition definitions from the JSON file."""
         try:
@@ -332,6 +382,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["materials"] = []
         if "cross_sections" not in self.state:
             self.state["cross_sections"] = []
+        if "time_functions" not in self.state:
+            self.state["time_functions"] = []
         if "analysis" not in self.state:
             # Set a default analysis if none is defined
             self.state["analysis"] = {
@@ -341,16 +393,48 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if "bcs" not in self.state:
             self.state["bcs"] = []
 
+        self.loadTimeFunctionTemplates()
         self.loadCrossSectionTemplates()
         self.loadAnalysisTemplates()
         self.loadMaterialTemplates()
         self.loadBCTemplates()
+        self.ensureDefaultTimeFunction()  # Ensure at least one time function exists
+
         self.populateMeshes()
         self.populateAnalysis()
         self.populateElementMapping()
         self.populateMaterials()
         self.populateCrossSections()
+        self.populateTimeFunctions()
         self.populateBCs()
+
+    def ensureDefaultTimeFunction(self):
+        """
+        If no time functions are defined, creates a default constant one.
+        This ensures there is always at least one option available for BCs.
+        """
+        time_functions = self.state.get("time_functions")
+        
+        if time_functions: # If the list is not empty, do nothing.
+            return
+
+        # If we are here, the list is empty. Let's add the default.
+        DEFAULT_TF_NAME = "ConstantFunction"
+        # Find the template for the constant function
+        constant_template = next((t for t in self.tf_templates if t['oofem_name'] == 'ConstantFunction'), None)
+
+        if not constant_template:
+            print("Warning: Could not find 'ConstantFunction' template to create default time function.")
+            return
+
+        new_tf_data = {
+            'id': str(uuid.uuid4()),
+            'name': DEFAULT_TF_NAME,
+            'oofem_type': constant_template['oofem_name'],
+            'params': {p['key']: p['default'] for p in constant_template.get('params', []) if 'default' in p}
+        }
+        time_functions.append(new_tf_data)
+        print(f"INFO: No time functions found. Created '{DEFAULT_TF_NAME}' as a default.")
 
     # ---------------------------
     # Mesh selector
@@ -741,13 +825,118 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateCrossSections()
 
     # ---------------------------
+    # Time Functions
+    # ---------------------------
+    def populateTimeFunctions(self):
+        """Populates the main time function table from the plugin state."""
+        self._block_signals = True
+        self.tfTable.setRowCount(0)
+        for tf_data in self.state.get("time_functions", []):
+            row = self.tfTable.rowCount()
+            self.tfTable.insertRow(row)
+
+            name_item = QtWidgets.QTableWidgetItem(tf_data.get("name", "Unnamed"))
+            name_item.setData(Qt.UserRole, tf_data.get("id"))
+
+            self.tfTable.setItem(row, 0, name_item)
+            self.tfTable.setItem(row, 1, QtWidgets.QTableWidgetItem(tf_data.get("oofem_type", "")))
+        self._block_signals = False
+        self.populateTimeFunctionDetails()
+
+    def populateTimeFunctionDetails(self):
+        """Populates the property editor based on the selected time function."""
+        self._block_signals = True
+        self.tfPropsTable.setRowCount(0)
+
+        selected_items = self.tfTable.selectedItems()
+        if not selected_items:
+            self._block_signals = False
+            return
+
+        tf_id = selected_items[0].data(Qt.UserRole)
+        tf_data = next((tf for tf in self.state['time_functions'] if tf['id'] == tf_id), None)
+        if not tf_data:
+            self._block_signals = False
+            return
+
+        template = next((t for t in self.tf_templates if t['oofem_name'] == tf_data['oofem_type']), None)
+        if not template:
+            self._block_signals = False
+            return
+
+        current_params = tf_data.get("params", {})
+        for param_def in template.get("params", []):
+            row = self.tfPropsTable.rowCount()
+            self.tfPropsTable.insertRow(row)
+
+            name_item = QtWidgets.QTableWidgetItem(param_def['name'])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setData(Qt.UserRole, param_def['key'])
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
+
+            value = current_params.get(param_def['key'], param_def.get('default', ''))
+            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
+
+            self.tfPropsTable.setItem(row, 0, name_item)
+            self.tfPropsTable.setItem(row, 1, value_item)
+
+        self._block_signals = False
+
+    def addTimeFunction(self):
+        """Opens a dialog to add a new time function instance."""
+        new_tf_data = OOFEMTimeFunctionDialog.run(self.tf_templates, parent=self)
+
+        if new_tf_data:
+            new_tf_data['id'] = str(uuid.uuid4())
+            new_tf_data['params'] = {}
+            template = next((t for t in self.tf_templates if t['oofem_name'] == new_tf_data['oofem_type']), None)
+            if template:
+                for p in template.get('params', []):
+                    if 'default' in p:
+                        new_tf_data['params'][p['key']] = p['default']
+            self.state["time_functions"].append(new_tf_data)
+            self.populateTimeFunctions()
+
+    def editTimeFunction(self):
+        """Opens a dialog to edit the selected time function instance."""
+        selected_items = self.tfTable.selectedItems()
+        if not selected_items:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No time function selected to edit.")
+            return
+
+        tf_id = selected_items[0].data(Qt.UserRole)
+        tf_data = next((tf for tf in self.state['time_functions'] if tf.get('id') == tf_id), None)
+        if not tf_data: return
+
+        updated_data = OOFEMTimeFunctionDialog.run(self.tf_templates, existing_tf=tf_data, parent=self)
+
+        if updated_data:
+            tf_data.update(updated_data)
+            self.populateTimeFunctions()
+            for row in range(self.tfTable.rowCount()):
+                if self.tfTable.item(row, 0).data(Qt.UserRole) == tf_id:
+                    self.tfTable.selectRow(row)
+                    break
+
+    def removeTimeFunction(self):
+        """Removes the selected time function from the state."""
+        selected_items = self.tfTable.selectedItems()
+        if not selected_items:
+            return
+        tf_id = selected_items[0].data(Qt.UserRole)
+        self.state['time_functions'] = [tf for tf in self.state['time_functions'] if tf.get('id') != tf_id]
+        self.populateTimeFunctions()
+
+    # ---------------------------
     # Boundary Conditions
     # ---------------------------
     def populateBCs(self):
         """Populates the main BC table from the plugin state."""
         self._block_signals = True
         self.bcTable.setRowCount(0)
-        for i, bc_data in enumerate(self.state.get("bcs", [])):
+        tf_id_to_name = {tf['id']: tf.get('name', 'Unnamed') for tf in self.state.get("time_functions", [])}
+
+        for bc_data in self.state.get("bcs", []):
             row = self.bcTable.rowCount()
             self.bcTable.insertRow(row)
             
@@ -757,6 +946,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.bcTable.setItem(row, 0, name_item)
             self.bcTable.setItem(row, 1, QtWidgets.QTableWidgetItem(bc_data.get("oofem_type", "")))
             self.bcTable.setItem(row, 2, QtWidgets.QTableWidgetItem(bc_data.get("assigned_group", "")))
+
+            tf_name = tf_id_to_name.get(bc_data.get("time_function_id"), "None")
+            self.bcTable.setItem(row, 3, QtWidgets.QTableWidgetItem(tf_name))
         self._block_signals = False
         self.populateBCDetails()
 
@@ -813,7 +1005,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     def addBC(self):
         """Opens a dialog to add a new BC instance."""
         mesh_groups = self.getMeshGroups()
-        new_bc_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, parent=self)
+        time_functions = self.state.get("time_functions", [])
+        new_bc_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, time_functions, parent=self)
 
         if new_bc_data:
             new_bc_data['id'] = str(uuid.uuid4())
@@ -826,6 +1019,30 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
             self.state["bcs"].append(new_bc_data)
             self.populateBCs()
+
+    def editBC(self):
+        """Opens a dialog to edit the selected BC instance."""
+        selected_items = self.bcTable.selectedItems()
+        if not selected_items:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No boundary condition selected to edit.")
+            return
+
+        bc_id = selected_items[0].data(Qt.UserRole)
+        bc_data = next((bc for bc in self.state['bcs'] if bc.get('id') == bc_id), None)
+        if not bc_data: return
+
+        mesh_groups = self.getMeshGroups()
+        time_functions = self.state.get("time_functions", [])
+        
+        updated_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, time_functions, existing_bc=bc_data, parent=self)
+
+        if updated_data:
+            bc_data.update(updated_data)
+            self.populateBCs()
+            for row in range(self.bcTable.rowCount()):
+                if self.bcTable.item(row, 0).data(Qt.UserRole) == bc_id:
+                    self.bcTable.selectRow(row)
+                    break
 
     def removeBC(self):
         """Removes the selected BC from the state."""
@@ -895,6 +1112,36 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         cs_data['params'][param_key] = new_value
+
+    def onTimeFunctionPropertyChanged(self, row, column):
+        """Updates the state when a time function property value is changed."""
+        if self._block_signals or column != 1:
+            return
+
+        selected_items = self.tfTable.selectedItems()
+        if not selected_items: return
+
+        tf_id = selected_items[0].data(Qt.UserRole)
+        tf_data = next((tf for tf in self.state['time_functions'] if tf['id'] == tf_id), None)
+        if not tf_data: return
+
+        key_item = self.tfPropsTable.item(row, 0)
+        value_item = self.tfPropsTable.item(row, 1)
+        param_key = key_item.data(Qt.UserRole)
+        param_type = key_item.data(Qt.UserRole + 1)
+        value_text = value_item.text().strip()
+
+        if not value_text:
+            if param_key in tf_data['params']:
+                del tf_data['params'][param_key]
+            return
+
+        try:
+            new_value = self._parse_param_value(value_text, param_type)
+        except (ValueError, TypeError):
+            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
+            return
+        tf_data['params'][param_key] = new_value
 
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
@@ -1041,6 +1288,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 self.state.get("materials", []),
                 self.state.get("cross_sections", []),
                 self.state.get("bcs", []),
+                self.state.get("time_functions", []),
+                self.material_templates,
                 self.bc_templates,
                 self.state.get("analysis", {}),
                 study_name,

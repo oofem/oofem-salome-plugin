@@ -5,8 +5,9 @@
       "display_name": "3D Isotropic Elastic",
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
-        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
-        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "The density of the material. Units: kg/m^3", "optional": false}
+        {"key": "n", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "The density of the material. Units: kg/m^3", "optional": false},
+        {"key": "tAlpha", "name": "Thermal Expansion Coefficient", "type": "float", "default": 0.0, "description": "The coefficient of thermal expansion. Units: 1/K", "optional": false}
       ]
     },
     {

@@ -21,7 +21,7 @@
     {
       "oofem_name": "ConstantEdgeLoad",
       "display_name": "Constant Edge Load (on Element Boundary)",
-      "apply_to": "element_boundary",
+      "apply_to": "elementedges",
       "params": [
         {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (D_u(1), D_v(2), D_w(3)=y)."},
         {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Load components in the specified DOFs."},

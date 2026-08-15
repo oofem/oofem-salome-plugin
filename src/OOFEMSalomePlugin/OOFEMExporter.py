@@ -12,12 +12,14 @@ from OOFEMSalomePlugin.OOFEMModule import getModule
 
 
 class OOFEMExporter:
-    def __init__(self, mesh, elem_map, mat_map, cs_map, bc_map, bc_templates, analysis_data, study_name, study_path):
+    def __init__(self, mesh, elem_map, mat_map, cs_map, bc_map, tf_map, mat_templates, bc_templates, analysis_data, study_name, study_path):
         self.mesh = mesh
         self.elem_map = elem_map
         self.mat_map = mat_map
         self.bc_map = bc_map
         self.cs_map = cs_map
+        self.tf_map = tf_map
+        self.mat_templates = {t['oofem_name']: t for t in mat_templates}
         self.bc_templates = {t['oofem_name']: t for t in bc_templates}
         self.analysis_data = analysis_data
         self.study_name = study_name
@@ -35,6 +37,8 @@ class OOFEMExporter:
         self._log(f"Found {len(self.group_to_cs)} cross sections assigned to groups.")
         # Build a map from material ID to the material data for quick lookups.
         self.mat_id_to_data = {mat['id']: mat for mat in self.mat_map}
+        # Build a map from time function ID to the TF data for quick lookups.
+        self.tf_id_to_data = {tf['id']: tf for tf in self.tf_map}
 
         self.elem_to_groups = self._build_element_to_group_map()
 
@@ -56,6 +60,12 @@ class OOFEMExporter:
         self._log("Assigning OOFEM IDs to materials...")
         for i, mat_data in enumerate(self.mat_map):
             mat_data['oofem_id'] = i + 1
+
+    def _assign_time_function_ids(self):
+        """Assigns a 1-based 'oofem_id' to each time function in the map."""
+        self._log("Assigning OOFEM IDs to time functions...")
+        for i, tf_data in enumerate(self.tf_map):
+            tf_data['oofem_id'] = i + 1
 
     def _build_set_map(self):
         """
@@ -80,6 +90,15 @@ class OOFEMExporter:
                     keyword = "nodes"
                 else:  # EDGE, FACE, VOLUME are all element groups
                     keyword = "elements"
+                    # Check if this group contains any elements that will be exported
+                    # (i.e., elements that have a cross-section/material assigned).
+                    # The self.elem_to_groups map contains all such elements.
+                    has_exported_elements = any(eid in self.elem_to_groups for eid in entity_ids)
+
+                    if not has_exported_elements:
+                        self._log(f"Skipping group '{group_name}' for set creation: it contains only elements without an assigned cross-section/material.", level=1)
+                        continue
+
                 
                 set_data = { 'oofem_id': set_id_counter, 'name': group_name, 'keyword': keyword, 'entity_ids': entity_ids }
                 self.set_map.append(set_data)
@@ -107,10 +126,10 @@ class OOFEMExporter:
                 continue
 
             template = self.bc_templates.get(bc_data['oofem_type'])
-            if not (template and template.get('apply_to') == 'element_boundary'):
+            if not (template and template.get('apply_to') == 'elementedges'):
                 continue
 
-            # This BC needs a 'sidesofelements' set.
+            # This BC needs a 'elementedges' set.
             all_groups = self.mesh.GetGroups()
             group = next((g for g in all_groups if g.GetName() == group_name), None)
             if not group:
@@ -127,13 +146,13 @@ class OOFEMExporter:
             # Create the new set data and add it to the set_map
             set_name = f"{bc_data['name']}_sides"
             set_data = {
-                'oofem_id': side_set_counter, 'name': set_name, 'keyword': 'sidesofelements', 'entity_ids': side_list
+                'oofem_id': side_set_counter, 'name': set_name, 'keyword': 'elementedges', 'entity_ids': side_list
             }
             self.set_map.append(set_data)
             
             # Store the new set ID in the bc_data for later use during export
             bc_data['oofem_set_id'] = side_set_counter
-            self._log(f"Created 'sidesofelements' set '{set_name}' with ID {side_set_counter} for BC '{bc_data['name']}'.")
+            self._log(f"Created 'elementedges' set '{set_name}' with ID {side_set_counter} for BC '{bc_data['name']}'.")
             side_set_counter += 1
 
     def _format_oofem_param(self, value):
@@ -354,6 +373,28 @@ class OOFEMExporter:
         self._log(f"Warning: No OOFEM mapping for Salome type '{salome_type_name}' (element {eid}). Using fallback name.")
         return f"Unmapped-{salome_type_name}"
 
+    def _export_time_functions(self, f):
+        """Exports all defined time functions."""
+        if not self.tf_map:
+            return
+        self._log(f"Exporting {len(self.tf_map)} time functions.")
+        f.write("# === TIME FUNCTIONS ===\n")
+        for tf_data in sorted(self.tf_map, key=lambda x: x['oofem_id']):
+            tf_id = tf_data['oofem_id']
+            oofem_type = tf_data['oofem_type']
+            params = tf_data.get('params', {})
+
+            param_list = []
+            for key, value in params.items():
+                param_list.append(str(key))
+                param_list.append(self._format_oofem_param(value))
+            params_str = " ".join(param_list)
+
+            f.write(f"{oofem_type} {tf_id} ")
+            if params_str:
+                f.write(f" {params_str}")
+            f.write("\n")
+
     def _export_materials(self, f):
         """Exports all defined materials."""
         if not self.mat_map:
@@ -391,13 +432,15 @@ class OOFEMExporter:
             keyword = set_data['keyword']
             entity_ids = set_data['entity_ids']
 
-            if keyword == 'sidesofelements':
+            if keyword == 'elementedges':
                 # For sides, entity_ids is a list of (eid, lidx) tuples
                 ids_str = " ".join([f"{eid} {lidx}" for eid, lidx in entity_ids])
+                ncomp = len(entity_ids)*2  # Each side has two components: element ID and local index
             else:
                 # For nodes/elements, it's a list of integers
                 ids_str = " ".join(map(str, sorted(entity_ids)))
-            f.write(f"set {set_id} name \"{name}\" {keyword} {ids_str}\n")
+                ncomp = len(entity_ids)
+            f.write(f"set {set_id} name \"{name}\" {keyword} {ncomp} {ids_str}\n")
 
     def _export_cross_sections(self, f):
         """Exports cross sections to link materials to element sets."""
@@ -433,7 +476,7 @@ class OOFEMExporter:
                 param_list.append(self._format_oofem_param(value))
             params_str = " ".join(param_list)
 
-            f.write(f"{cs_type} {cs_id_counter} name \"{cs_data['name']}\" mat {oofem_mat_id} set {set_id}")
+            f.write(f"{cs_type} {cs_id_counter} name \"{cs_data['name']}\" material {oofem_mat_id} set {set_id}")
             if params_str:
                 f.write(f" {params_str}")
             f.write("\n")
@@ -468,17 +511,24 @@ class OOFEMExporter:
                     continue
                 f.write(f"{bc_data['oofem_type']} {bc_id_counter} name \"{bc_data['name']}\"  set {set_id}")
 
-            elif apply_to == 'element_boundary':
+            elif apply_to == 'elementedges':
                 set_id = bc_data.get('oofem_set_id')
                 if not set_id:
                     self._log(f"Warning: Pre-calculated set for BC '{bc_data['name']}' on group '{group_name}' not found. Skipping.")
                     continue
                 # The set itself is now written in _export_sets
-                f.write(f"{bc_data['oofem_type']} {bc_id_counter} name \"{bc_data['name']}\" type set {set_id}")
+                f.write(f"{bc_data['oofem_type']} {bc_id_counter} name \"{bc_data['name']}\" set {set_id}")
 
             if set_id is None:
                 self._log(f"Warning: Could not determine set for BC '{bc_data['name']}'. Skipping.")
                 continue
+
+            # Add time function if one is assigned
+            tf_internal_id = bc_data.get('time_function_id')
+            if tf_internal_id:
+                tf_info = self.tf_id_to_data.get(tf_internal_id)
+                if tf_info:
+                    f.write(f" loadTimeFunction {tf_info['oofem_id']}")
 
             param_list = []
             for k, v in bc_data.get('params', {}).items():
@@ -557,7 +607,9 @@ class OOFEMExporter:
         counts['nelem'] = len(self.elem_to_groups)
         counts['nmat'] = len(self.mat_map)
         counts['ncrosssect'] = len(self.cs_map)
+        counts['nltf'] = len(self.tf_map)
         
+
         bcs_to_export = [bc for bc in self.bc_map if bc.get('assigned_group')]
         counts['nbc'] = len(bcs_to_export)
         
@@ -572,7 +624,7 @@ class OOFEMExporter:
         """Writes the component size records to the file."""
         f.write("# === COMPONENT SIZES ===\n")
         # OOFEM keywords are case-sensitive and have a typical order.
-        order = ['ndofman', 'nelem', 'nmat', 'ncrosssect', 'nset', 'nbc', 'nic']
+        order = ['ndofman', 'nelem', 'nmat', 'ncrosssect', 'nset', 'nltf', 'nbc', 'nic']
         for component in order:
             if component in counts:
                 f.write(f"{component} {counts[component]} ")
@@ -584,6 +636,7 @@ class OOFEMExporter:
         try:
             # Assign IDs and build data structures before any export functions are called.
             self._assign_material_ids()
+            self._assign_time_function_ids()
             self._build_set_map()
             self._build_bc_sets()
 
@@ -611,6 +664,7 @@ class OOFEMExporter:
                 self._export_cross_sections(f)
                 self._export_materials(f)
                 self._export_boundary_conditions(f)
+                self._export_time_functions(f)
                 self._export_sets(f)
 
                 

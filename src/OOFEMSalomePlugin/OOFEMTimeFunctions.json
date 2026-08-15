@@ -1,0 +1,49 @@
+{
+  "time_functions": [
+    {
+      "oofem_name": "ConstantFunction",
+      "display_name": "Constant",
+      "description": "A constant value over time.",
+      "params": [
+        {
+          "key": "f(t)",
+          "name": "Value",
+          "type": "float",
+          "default": 1.0,
+          "description": "The constant value of the function."
+        }
+      ]
+    },
+    {
+      "oofem_name": "Linear",
+      "display_name": "Linear Ramp",
+      "description": "Linearly interpolates between two values over a given time interval.",
+      "params": [
+        {
+          "key": "t0",
+          "name": "Start Time",
+          "type": "float",
+          "default": 0.0
+        },
+        {
+          "key": "v0",
+          "name": "Start Value",
+          "type": "float",
+          "default": 0.0
+        },
+        {
+          "key": "t1",
+          "name": "End Time",
+          "type": "float",
+          "default": 1.0
+        },
+        {
+          "key": "v1",
+          "name": "End Value",
+          "type": "float",
+          "default": 1.0
+        }
+      ]
+    }
+  ]
+}
