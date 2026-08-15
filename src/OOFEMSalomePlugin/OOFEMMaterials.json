@@ -1,16 +1,16 @@
 {
   "materials": [
     {
-      "oofem_name": "ElasticIsotropic3d",
+      "oofem_name": "IsoLE",
       "display_name": "3D Isotropic Elastic",
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
         {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
-        {"key": "d", "name": "Damping Coeff", "type": "float", "default": 0.0, "description": "Optional mass proportional damping coefficient.", "optional": true}
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "The density of the material. Units: kg/m^3", "optional": false}
       ]
     },
     {
-      "oofem_name": "ElasticIsotropic2d",
+      "oofem_name": "OtherMaterial_1",
       "display_name": "2D Isotropic Elastic (Plane Stress)",
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
@@ -19,7 +19,7 @@
       ]
     },
     {
-      "oofem_name": "Truss",
+      "oofem_name": "OtherMaterial_2",
       "display_name": "1D Truss",
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},

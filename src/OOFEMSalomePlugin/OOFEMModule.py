@@ -63,7 +63,7 @@ class OOFEMModule:
 
             if not self.debug_console:
                 print("Creating OOFEM Debug Console...")
-                self.debug_console = DebugConsole(main_window)
+                self.debug_console = DebugConsole(main_window, logLevel=2)  # Set logLevel to 2 for more verbose output
                 main_window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self.debug_console)
 
             self.dock.show()

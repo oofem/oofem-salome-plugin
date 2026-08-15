@@ -1,0 +1,56 @@
+{
+  "cross_sections": [
+    {
+      "oofem_name": "SimpleCS ",
+      "display_name": "SimpleCS",
+      "description": "Integral cross section with constant properties.",
+      "params": [
+        {
+          "key": "thick",
+          "name": "Thickness",
+          "type": "float",
+          "default": 1.0,
+          "description": "The thickness of the cross section."
+        },
+        {
+          "key": "width",
+          "name": "Width",
+          "type": "float",
+          "default": 1.0,
+          "description": "The width of the cross section."
+        },
+        {
+          "key": "area",
+          "name": "Area",
+          "type": "float",
+          "default": 1.0,
+          "description": "The area of the cross section."
+        },
+        {
+          "key": "Iy",
+          "name": "Moment of Inertia Iy",
+          "type": "float",
+          "default": 1.0,
+          "description": "The moment of inertia about the y-axis.",
+          "optional": true
+        },
+        {
+          "key": "Iz",
+          "name": "Moment of Inertia Iz",
+          "type": "float",
+          "default": 1.0,
+          "description": "The moment of inertia about the z-axis.",
+          "optional": true
+        },
+        {
+          "key": "Ik",
+          "name": "Torsional Constant Ik",
+          "type": "float",
+          "default": 1.0,
+          "description": "The Saint-Venant torsional constant of the cross section.",
+          "optional": true
+        }
+      ]
+    }
+  ]
+}

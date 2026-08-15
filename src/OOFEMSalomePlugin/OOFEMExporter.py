@@ -12,13 +12,16 @@ from OOFEMSalomePlugin.OOFEMModule import getModule
 
 
 class OOFEMExporter:
-    def __init__(self, mesh, elem_map, mat_map, bc_map, bc_templates, analysis_data):
+    def __init__(self, mesh, elem_map, mat_map, cs_map, bc_map, bc_templates, analysis_data, study_name, study_path):
         self.mesh = mesh
         self.elem_map = elem_map
         self.mat_map = mat_map
         self.bc_map = bc_map
+        self.cs_map = cs_map
         self.bc_templates = {t['oofem_name']: t for t in bc_templates}
         self.analysis_data = analysis_data
+        self.study_name = study_name
+        self.study_path = study_path
         self.debug_console = None
         self.SALOME_TYPE_NAMES = self._build_salome_type_map()
 
@@ -27,25 +30,111 @@ class OOFEMExporter:
             self.debug_console = module.debug_console
 
         self._log("Initializing exporter...")
-        self.group_to_mat = {mat['assigned_group']: mat for mat in self.mat_map if mat.get('assigned_group')}
-        self._log(f"Found {len(self.group_to_mat)} materials assigned to groups.")
+        # Build a map from group name to the cross section assigned to it.
+        self.group_to_cs = {cs['assigned_group']: cs for cs in self.cs_map if cs.get('assigned_group')}
+        self._log(f"Found {len(self.group_to_cs)} cross sections assigned to groups.")
+        # Build a map from material ID to the material data for quick lookups.
+        self.mat_id_to_data = {mat['id']: mat for mat in self.mat_map}
 
         self.elem_to_groups = self._build_element_to_group_map()
 
         # Maps for tracking exported entities
         self.group_name_to_set_id = {}
-        self.mat_internal_id_to_oofem_id = {}
+        self.set_map = []
         # A map from a canonical node tuple of a boundary (face/edge) to (element_id, local_side_index)
         self.boundary_to_parent_map = self._build_boundary_to_parent_map()
 
-        self.group_to_cs_id = {}
-
-    def _log(self, msg):
+    def _log(self, msg, level=0):
         """Helper to log to the OOFEM debug console if available."""
         if self.debug_console:
-            self.debug_console.log(msg)
+            self.debug_console.log(msg, level)
         else:
             print(f"OOFEMExporter log: {msg}")
+
+    def _assign_material_ids(self):
+        """Assigns a 1-based 'oofem_id' to each material in the material map."""
+        self._log("Assigning OOFEM IDs to materials...")
+        for i, mat_data in enumerate(self.mat_map):
+            mat_data['oofem_id'] = i + 1
+
+    def _build_set_map(self):
+        """
+        Builds a list of set data dictionaries from mesh groups, assigns OOFEM IDs,
+        and populates the group_name_to_set_id map for quick lookups.
+        """
+        self._log("Building set data from mesh groups...")
+        self.set_map = []
+        self.group_name_to_set_id.clear()
+        set_id_counter = 1
+        mesh_groups = self.mesh.GetGroups()
+        for group in mesh_groups:
+            group_name = group.GetName()
+            try:
+                entity_ids = group.GetIDs()
+                if not entity_ids:
+                    self._log(f"Skipping empty group '{group_name}' during set creation.", level=1)
+                    continue
+
+                group_type = group.GetType()
+                if group_type == SMESH.NODE:
+                    keyword = "nodes"
+                else:  # EDGE, FACE, VOLUME are all element groups
+                    keyword = "elements"
+                
+                set_data = { 'oofem_id': set_id_counter, 'name': group_name, 'keyword': keyword, 'entity_ids': entity_ids }
+                self.set_map.append(set_data)
+                self.group_name_to_set_id[group_name] = set_id_counter
+                set_id_counter += 1
+
+            except Exception as e:
+                self._log(f"Warning: Could not process group '{group_name}' for set creation. Skipping. Reason: {e}")
+        self._log(f"Created {len(self.set_map)} sets from mesh groups.")
+
+    def _build_bc_sets(self):
+        """
+        Creates special sets for boundary conditions applied to element boundaries
+        and appends them to the main set_map.
+        """
+        self._log("Building special sets for boundary conditions...")
+        
+        # Start numbering BC sets after the last mesh group set
+        max_set_id = max([s['oofem_id'] for s in self.set_map]) if self.set_map else 0
+        side_set_counter = max_set_id + 1
+
+        for bc_data in self.bc_map:
+            group_name = bc_data.get('assigned_group')
+            if not group_name:
+                continue
+
+            template = self.bc_templates.get(bc_data['oofem_type'])
+            if not (template and template.get('apply_to') == 'element_boundary'):
+                continue
+
+            # This BC needs a 'sidesofelements' set.
+            all_groups = self.mesh.GetGroups()
+            group = next((g for g in all_groups if g.GetName() == group_name), None)
+            if not group:
+                self._log(f"Warning: Group '{group_name}' for BC '{bc_data['name']}' not found during set creation. Skipping.")
+                continue
+            
+            boundary_elem_ids = group.GetIDs()
+            side_list = self._find_parent_sides(boundary_elem_ids, group_name)
+
+            if not side_list:
+                self._log(f"Warning: Could not identify any element sides for BC '{bc_data['name']}' on group '{group_name}'. Set not created.")
+                continue
+
+            # Create the new set data and add it to the set_map
+            set_name = f"{bc_data['name']}_sides"
+            set_data = {
+                'oofem_id': side_set_counter, 'name': set_name, 'keyword': 'sidesofelements', 'entity_ids': side_list
+            }
+            self.set_map.append(set_data)
+            
+            # Store the new set ID in the bc_data for later use during export
+            bc_data['oofem_set_id'] = side_set_counter
+            self._log(f"Created 'sidesofelements' set '{set_name}' with ID {side_set_counter} for BC '{bc_data['name']}'.")
+            side_set_counter += 1
 
     def _format_oofem_param(self, value):
         """Formats a parameter value for the OOFEM input file."""
@@ -94,7 +183,8 @@ class OOFEMExporter:
         mesh_groups = self.mesh.GetGroups()
         for group in mesh_groups:
             group_name = group.GetName()
-            if group_name in self.group_to_mat and group.GetType() != SMESH.NODE:
+            # We care about any group that has a cross-section assigned to it.
+            if group_name in self.group_to_cs and group.GetType() != SMESH.NODE:
                 try:
                     # GetIDs() is the correct method to get entity IDs from a group.
                     element_ids = group.GetIDs()
@@ -105,7 +195,7 @@ class OOFEMExporter:
                 except Exception as e:
                     # This can happen if the group is valid but something else goes wrong.
                     self._log(f"Warning: Could not retrieve elements from group '{group_name}'. Skipping. Reason: {e}")
-        self._log(f"Mapped {len(elem_to_groups)} elements to material groups.")
+        self._log(f"Mapped {len(elem_to_groups)} elements to cross-section groups.")
         return elem_to_groups
 
     def _build_boundary_to_parent_map(self):
@@ -189,13 +279,33 @@ class OOFEMExporter:
         self._log(list(boundary_map.items())[:5])
 
         return boundary_map
+
+    def _find_parent_sides(self, boundary_elem_ids, group_name):
+        """Given a list of boundary element IDs, find their parent elements and local side indices."""
+        side_list = []
+        for beid in boundary_elem_ids:
+            try:
+                # Get the node IDs for the boundary element, which is itself an element.
+                b_nodes_list = self.mesh.GetElemNodes(beid)
+            except TypeError:
+                b_nodes_list = self.mesh.GetElemNodes(beid, False)
+
+            b_nodes = tuple(sorted(b_nodes_list))
+            parent_info = self.boundary_to_parent_map.get(b_nodes)
+
+            if parent_info:
+                side_list.extend(parent_info)
+            else:
+                self._log(f"Warning: Could not find parent element for boundary element {beid} in group '{group_name}'.")
+        return side_list
+
     def _get_oofem_element_type(self, eid):
         """
         Determines the OOFEM element type for a given Salome element ID.
         Priority:
-        1. Group-specific override from a material assignment.
+        1. Cross-section-specific override.
         2. Global element mapping.
-        3. Fallback to "SalomeCell##".
+        3. Fallback to "Unmapped-SalomeTypeName".
         """
         # The GetElementType method requires a second boolean argument (iselem) in some Salome versions.
         salome_type_id = self.mesh.GetElementType(eid, True)
@@ -207,29 +317,26 @@ class OOFEMExporter:
         lookup_key = salome_type_id._v - 1
         salome_type_name = self.SALOME_TYPE_NAMES.get(lookup_key)
 
-        
-
         if not salome_type_name:
             self._log(f"Warning: Unknown Salome element type ID '{salome_type_id._v}' (lookup key {lookup_key}) for element {eid}. Using fallback.")
             return f"SalomeCell{salome_type_id._v}"
 
-
-        # 1. Check for group-specific overrides
+        # 1. Check for cross-section-specific overrides
         element_groups = self.elem_to_groups.get(eid, [])
         overrides = {}
         if element_groups:
             for group_name in element_groups:
-                mat = self.group_to_mat.get(group_name)
-                if mat and mat.get("element_mapping_override"):
-                    override_map = mat["element_mapping_override"]
-                    if salome_type_name in override_map and override_map[salome_type_name]:
+                cs = self.group_to_cs.get(group_name)
+                if cs:
+                    override_map = cs.get("element_mapping_override")
+                    if override_map and salome_type_name in override_map and override_map[salome_type_name]:
                         oofem_type = override_map[salome_type_name]
                         if oofem_type not in overrides:
                             overrides[oofem_type] = []
                         overrides[oofem_type].append(group_name)
 
         if len(overrides) > 1:
-            conflicting_types = ", ".join([f"'{t}' from group(s) {g}" for t, g in overrides.items()])
+            conflicting_types = ", ".join([f"'{t}' from group(s) {', '.join(g)}" for t, g in overrides.items()])
             self._log(f"Warning: Element {eid} (type {salome_type_name}) has conflicting element type mappings: {conflicting_types}.")
             self._log(f"Using the first one found: '{list(overrides.keys())[0]}'.")
             return list(overrides.keys())[0]
@@ -237,15 +344,13 @@ class OOFEMExporter:
         if len(overrides) == 1:
             return list(overrides.keys())[0]
 
-        # 2. No overrides, check global mapping
+        # 2. No overrides found, check global mapping
         global_mapping = self.elem_map.get(salome_type_name)
         if global_mapping:
-            self._log(f"Cell {eid} of salome type {salome_type_id} salome type name {salome_type_name} mapped to OOFEM type {global_mapping}.")
+            self._log(f"Cell {eid} of salome type {salome_type_id} salome type name {salome_type_name} mapped to OOFEM type {global_mapping}.", level=2)
             return global_mapping
 
         # 3. Fallback
-        # This fallback is hit if a Salome type (e.g., "Polygon") is recognized but has no
-        # corresponding entry in the global element mapping.
         self._log(f"Warning: No OOFEM mapping for Salome type '{salome_type_name}' (element {eid}). Using fallback name.")
         return f"Unmapped-{salome_type_name}"
 
@@ -255,100 +360,84 @@ class OOFEMExporter:
             return
         self._log(f"Exporting {len(self.mat_map)} materials.")
         f.write("# === MATERIALS ===\n")
-        self.mat_internal_id_to_oofem_id.clear()
-        for i, mat_data in enumerate(self.mat_map):
-            mat_id = i + 1  # OOFEM uses 1-based indexing
-            self.mat_internal_id_to_oofem_id[mat_data['id']] = mat_id
-
+        for mat_data in sorted(self.mat_map, key=lambda x: x['oofem_id']):
+            mat_id = mat_data['oofem_id']
             oofem_type = mat_data['oofem_type']
             params = mat_data.get('params', {})
 
             param_list = []
+            # Find template to get correct parameter order, if available
+            # Note: This part is not fully implemented in the UI side yet.
+            # For now, we just iterate over the dictionary keys.
+            param_keys = params.keys()
+
             for key, value in params.items():
                 param_list.append(str(key))
                 param_list.append(self._format_oofem_param(value))
-
             params_str = " ".join(param_list)
-            # n_params should be the count of actual values/words in the final string
-            n_params = len(params_str.split())
 
-            f.write(f"material {mat_id} type {oofem_type} n_params {n_params} params {params_str}\n")
+            f.write(f"{oofem_type} {mat_id} name \"{mat_data['name']}\" {params_str}\n")
 
     def _export_sets(self, f):
-        """Exports all mesh groups as OOFEM sets."""
-        mesh_groups = self.mesh.GetGroups()
-        if not mesh_groups:
+        """Exports all sets defined in the pre-built set_map."""
+        if not self.set_map:
             return
-        self._log(f"Exporting {len(mesh_groups)} groups as sets.")
+        self._log(f"Exporting {len(self.set_map)} sets.")
         f.write(f"# === SETS ===\n")
-        set_id_counter = 1
-        self.group_name_to_set_id.clear()
-        for group in mesh_groups:
-            group_name = group.GetName()
-            group_type = group.GetType()
+        # This now includes mesh-group-based sets and special BC sets
+        for set_data in sorted(self.set_map, key=lambda x: x['oofem_id']):
+            set_id = set_data['oofem_id']
+            name = set_data['name']
+            keyword = set_data['keyword']
+            entity_ids = set_data['entity_ids']
 
-            try:
-                entity_ids = group.GetIDs()
-            except Exception as e:
-                self._log(f"Warning: Could not get IDs for group '{group_name}'. Skipping. Reason: {e}")
-                continue
-
-            if not entity_ids:
-                self._log(f"Skipping empty group '{group_name}'.")
-                continue
-
-            if group_type == SMESH.NODE:
-                keyword = "nodes"
-            else:  # EDGE, FACE, VOLUME are all element groups
-                keyword = "elements"
-
-            ids_str = " ".join(map(str, sorted(entity_ids)))
-            f.write(f"set {set_id_counter} name \"{group_name}\" {keyword} {ids_str}\n")
-            self.group_name_to_set_id[group_name] = set_id_counter
-            set_id_counter += 1
+            if keyword == 'sidesofelements':
+                # For sides, entity_ids is a list of (eid, lidx) tuples
+                ids_str = " ".join([f"{eid} {lidx}" for eid, lidx in entity_ids])
+            else:
+                # For nodes/elements, it's a list of integers
+                ids_str = " ".join(map(str, sorted(entity_ids)))
+            f.write(f"set {set_id} name \"{name}\" {keyword} {ids_str}\n")
 
     def _export_cross_sections(self, f):
         """Exports cross sections to link materials to element sets."""
         self._log("Exporting cross sections.")
+        if not self.cs_map:
+            return
         f.write("# === CROSS SECTIONS ===\n")
         cs_id_counter = 1
-        self.group_to_cs_id.clear()
 
-        for mat_data in self.mat_map:
-            group_name = mat_data.get('assigned_group')
+        for cs_data in sorted(self.cs_map, key=lambda x: x.get('name', '')):
+            group_name = cs_data.get('assigned_group')
             if not group_name:
                 continue
 
-            oofem_mat_id = self.mat_internal_id_to_oofem_id.get(mat_data['id'])
-            set_id = self.group_name_to_set_id.get(group_name)
+            # Find the oofem_id of the material from the main material map
+            mat_id = cs_data.get('material_id')
+            mat_info = self.mat_id_to_data.get(mat_id)
+            if not mat_info:
+                self._log(f"Warning: Could not find material with ID '{mat_id}' for cross section '{cs_data['name']}'. Skipping.")
+                continue
+            oofem_mat_id = mat_info.get('oofem_id')
 
-            if not (oofem_mat_id and set_id):
-                self._log(f"Warning: Could not create cross section for material '{mat_data['name']}' on group '{group_name}'. Material or Set ID not found.")
+            set_id = self.group_name_to_set_id.get(group_name)
+            if not set_id:
+                self._log(f"Warning: Could not find set for group '{group_name}' for cross section '{cs_data['name']}'. Skipping.")
                 continue
 
-            # Infer cross-section type from a representative element in the group
-            oofem_elem_type = "unknown"
-            for eid, groups in self.elem_to_groups.items():
-                if group_name in groups:
-                    oofem_elem_type = self._get_oofem_element_type(eid)
-                    break
+            cs_type = cs_data['oofem_type']
+            
+            param_list = []
+            for key, value in cs_data.get('params', {}).items():
+                param_list.append(str(key))
+                param_list.append(self._format_oofem_param(value))
+            params_str = " ".join(param_list)
 
-            cs_type, n_dofs, params = "unknown", 0, ""
-            if "planestress" in oofem_elem_type.lower():
-                cs_type, n_dofs, params = "PlaneStress", 2, "t 1.0"  # Default thickness
-            elif "truss" in oofem_elem_type.lower():
-                cs_type, n_dofs, params = "Truss", 3, "A 1.0"  # Default area
-            elif "3d" in oofem_elem_type.lower():
-                cs_type, n_dofs = "3d", 3
-
-            if cs_type != "unknown":
-                f.write(f"crossSect {cs_id_counter} type {cs_type} n_dofs {n_dofs} mat {oofem_mat_id} set {set_id}")
-                if params: f.write(f" {params}")
-                f.write("\n")
-                self.group_to_cs_id[group_name] = cs_id_counter
-                cs_id_counter += 1
-            else:
-                self._log(f"Warning: Could not determine cross section type for element type '{oofem_elem_type}' in group '{group_name}'.")
+            f.write(f"{cs_type} {cs_id_counter} name \"{cs_data['name']}\" mat {oofem_mat_id} set {set_id}")
+            if params_str:
+                f.write(f" {params_str}")
+            f.write("\n")
+            cs_id_counter += 1
 
     def _export_boundary_conditions(self, f):
         """Exports all defined boundary conditions."""
@@ -358,11 +447,7 @@ class OOFEMExporter:
         f.write("# === BOUNDARY CONDITIONS ===\n")
         bc_id_counter = 1
 
-        # We need a copy of the set counter because we might create new sets for boundary loads
-        max_set_id = max(self.group_name_to_set_id.values()) if self.group_name_to_set_id else 0
-        side_set_counter = max_set_id + 1
-
-        for bc_data in self.bc_map:
+        for bc_data in sorted(self.bc_map, key=lambda x: x.get('name', '')):
             group_name = bc_data.get('assigned_group')
             if not group_name:
                 self._log(f"Skipping BC '{bc_data['name']}' because it is not assigned to a group.")
@@ -374,48 +459,26 @@ class OOFEMExporter:
                 continue
 
             apply_to = template.get('apply_to')
-            set_id = self.group_name_to_set_id.get(group_name)
-
+            
+            set_id = None
             if apply_to in ['nodes', 'elements']:
+                set_id = self.group_name_to_set_id.get(group_name)
                 if not set_id:
                     self._log(f"Warning: Group '{group_name}' for BC '{bc_data['name']}' not found. Skipping.")
                     continue
-                f.write(f"BoundaryCondition {bc_id_counter} type {bc_data['oofem_type']} set {set_id}")
+                f.write(f"{bc_data['oofem_type']} {bc_id_counter} name \"{bc_data['name']}\"  set {set_id}")
 
             elif apply_to == 'element_boundary':
-                # This is the complex case. We need to create a new 'sidesofelements' set.
-                all_groups = self.mesh.GetGroups()
-                group = next((g for g in all_groups if g.GetName() == group_name), None)
-                if not group:
-                    self._log(f"Warning: Group '{group_name}' for BC '{bc_data['name']}' not found. Skipping.")
+                set_id = bc_data.get('oofem_set_id')
+                if not set_id:
+                    self._log(f"Warning: Pre-calculated set for BC '{bc_data['name']}' on group '{group_name}' not found. Skipping.")
                     continue
-                
-                boundary_elem_ids = group.GetIDs()
-                side_list = []
-                for beid in boundary_elem_ids:
-                    try:
-                        # Get the node IDs for the boundary element, which is itself an element.
-                        b_nodes_list = self.mesh.GetElemNodes(beid)
-                    except TypeError:
-                        b_nodes_list = self.mesh.GetElemNodes(beid, False)
+                # The set itself is now written in _export_sets
+                f.write(f"{bc_data['oofem_type']} {bc_id_counter} name \"{bc_data['name']}\" type set {set_id}")
 
-                    b_nodes = tuple(sorted(b_nodes_list))
-                    parent_info = self.boundary_to_parent_map.get(b_nodes)
-
-                    if parent_info:
-                        side_list.extend(parent_info)
-                    else:
-                        self._log(f"Warning: Could not find parent element for boundary element {beid} in group '{group_name}'.")
-
-                if not side_list:
-                    self._log(f"Warning: Could not identify any element sides for BC '{bc_data['name']}' on group '{group_name}'. Skipping.")
-                    continue
-
-                # Create the new set for OOFEM
-                side_str = " ".join([f"{eid} {lidx}" for eid, lidx in side_list])
-                f.write(f"set {side_set_counter} name \"{bc_data['name']}_sides\" sidesofelements {side_str}\n")
-                f.write(f"BoundaryCondition {bc_id_counter} type {bc_data['oofem_type']} set {side_set_counter}")
-                side_set_counter += 1
+            if set_id is None:
+                self._log(f"Warning: Could not determine set for BC '{bc_data['name']}'. Skipping.")
+                continue
 
             param_list = []
             for k, v in bc_data.get('params', {}).items():
@@ -434,7 +497,7 @@ class OOFEMExporter:
         # f.write(f"nodes {len(nodes)}\n")
         for nid in sorted(nodes):
             x, y, z = self.mesh.GetNodeXYZ(nid)
-            f.write(f"node {nid} coords 3 {x:g} {y:g} {z:g}\n")
+            f.write(f"node {nid:<10} coords 3 {x:20.10f} {y:20.10f} {z:20.10f}\n")
 
     def _export_elements(self, f):
         """Exports all elements that have an assigned material."""
@@ -461,9 +524,9 @@ class OOFEMExporter:
 
             oofem_type = self._get_oofem_element_type(eid)
 
-            conn_str = " ".join(map(str, conn))
+            conn_str = "".join([f"{node_id:10}" for node_id in conn])
             nnodes = len(conn)
-            f.write(f"{oofem_type} {eid} nodes {nnodes} {conn_str}\n")
+            f.write(f"{oofem_type:<20} {eid:<10} nodes {nnodes:4} {conn_str}\n")
 
     def _export_analysis(self, f):
         if not self.analysis_data:
@@ -493,20 +556,13 @@ class OOFEMExporter:
         counts['ndofman'] = self.mesh.NbNodes()
         counts['nelem'] = len(self.elem_to_groups)
         counts['nmat'] = len(self.mat_map)
-        counts['ncrosssect'] = len([m for m in self.mat_map if m.get('assigned_group')])
+        counts['ncrosssect'] = len(self.cs_map)
         
         bcs_to_export = [bc for bc in self.bc_map if bc.get('assigned_group')]
         counts['nbc'] = len(bcs_to_export)
         
-        # Sets: start with non-empty mesh groups, then add sets created for BCs.
-        num_mesh_sets = len([g for g in self.mesh.GetGroups() if g.GetIDs()])
-        num_bc_sets = 0
-        for bc_data in bcs_to_export:
-            template = self.bc_templates.get(bc_data['oofem_type'])
-            if template and template.get('apply_to') == 'element_boundary':
-                num_bc_sets += 1
-                
-        counts['nset'] = num_mesh_sets + num_bc_sets
+        # All sets (mesh-based and BC-based) are now in set_map.
+        counts['nset'] = len(self.set_map)
         counts['nic'] = 0  # Not implemented in this exporter
         
         self._log(f"Calculated component counts: {counts}")
@@ -526,12 +582,22 @@ class OOFEMExporter:
     def export(self, filename):
         self._log(f"--- Starting OOFEM Export to {filename} ---")
         try:
+            # Assign IDs and build data structures before any export functions are called.
+            self._assign_material_ids()
+            self._build_set_map()
+            self._build_bc_sets()
+
             # Pre-calculate counts and determine domain type
             counts = self._calculate_component_counts()
             domain_type = '3d'
 
             with open(filename, "w") as f:
                 f.write("# OOFEM input file generated by OOFEM Salome Plugin\n")
+                if self.study_path:
+                    f.write(f"# Salome Study: {self.study_name} ({self.study_path})\n")
+                else:
+                    f.write(f"# Salome Study: {self.study_name}\n")
+
                 f.write("problem.out\n")
                 f.write("Problem description\n")
                 self._export_analysis(f)
@@ -546,6 +612,7 @@ class OOFEMExporter:
                 self._export_materials(f)
                 self._export_boundary_conditions(f)
                 self._export_sets(f)
+
                 
             self._log(f"--- Export to {filename} finished successfully. ---")
         except Exception as e:

@@ -10,6 +10,7 @@ import traceback
 from OOFEMSalomePlugin.OOFEMState import OOFEMState
 from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
+from OOFEMSalomePlugin.OOFEMCrossSectionDialog import OOFEMCrossSectionDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
 
 
@@ -22,6 +23,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.state = {}
         self.material_templates = []
         self.analysis_templates = []
+        self.cs_templates = []
         self.bc_templates = []
         self._block_signals = False
 
@@ -79,18 +81,22 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         
         # Buttons for adding/removing materials
         mat_btn_layout = QtWidgets.QHBoxLayout()
-        self.addMatBtn = QtWidgets.QPushButton("Add Material")
+        self.addMatBtn = QtWidgets.QPushButton("Add")
         self.addMatBtn.clicked.connect(self.addMaterial)
-        self.removeMatBtn = QtWidgets.QPushButton("Remove Material")
+        self.editMatBtn = QtWidgets.QPushButton("Edit")
+        self.editMatBtn.clicked.connect(self.editMaterial)
+        self.removeMatBtn = QtWidgets.QPushButton("Remove")
         self.removeMatBtn.clicked.connect(self.removeMaterial)
         mat_btn_layout.addWidget(self.addMatBtn)
+        mat_btn_layout.addWidget(self.editMatBtn)
         mat_btn_layout.addWidget(self.removeMatBtn)
+        mat_btn_layout.addStretch()
         mat_layout.addLayout(mat_btn_layout)
 
         # Table of defined materials
         self.matTable = QtWidgets.QTableWidget()
-        self.matTable.setColumnCount(3)
-        self.matTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group"])
+        self.matTable.setColumnCount(2)
+        self.matTable.setHorizontalHeaderLabels(["Name", "OOFEM Type"])
         self.matTable.itemSelectionChanged.connect(self.populateMaterialDetails)
         self.matTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.matTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -111,16 +117,58 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         mat_layout.addStretch()
         self.tabs.addTab(mat_tab, "Materials")
 
+        # Tab 4: Cross Sections
+        cs_tab = QtWidgets.QWidget()
+        cs_layout = QtWidgets.QVBoxLayout(cs_tab)
+
+        cs_btn_layout = QtWidgets.QHBoxLayout()
+        self.addCSBtn = QtWidgets.QPushButton("Add")
+        self.addCSBtn.clicked.connect(self.addCrossSection)
+        self.editCSBtn = QtWidgets.QPushButton("Edit")
+        self.editCSBtn.clicked.connect(self.editCrossSection)
+        self.removeCSBtn = QtWidgets.QPushButton("Remove")
+        self.removeCSBtn.clicked.connect(self.removeCrossSection)
+        cs_btn_layout.addWidget(self.addCSBtn)
+        cs_btn_layout.addWidget(self.editCSBtn)
+        cs_btn_layout.addWidget(self.removeCSBtn)
+        cs_btn_layout.addStretch()
+        cs_layout.addLayout(cs_btn_layout)
+
+        self.csTable = QtWidgets.QTableWidget()
+        self.csTable.setColumnCount(4)
+        self.csTable.setHorizontalHeaderLabels(["Name", "Type", "Material", "Assigned Group"])
+        self.csTable.itemSelectionChanged.connect(self.populateCrossSectionDetails)
+        self.csTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.csTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        cs_layout.addWidget(self.csTable)
+
+        cs_props_group = QtWidgets.QGroupBox("Cross Section Properties (select a section above)")
+        cs_props_layout = QtWidgets.QVBoxLayout(cs_props_group)
+        self.csPropsTable = QtWidgets.QTableWidget()
+        self.csPropsTable.setColumnCount(2)
+        self.csPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self.csPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.csPropsTable.cellChanged.connect(self.onCrossSectionPropertyChanged)
+        cs_props_layout.addWidget(self.csPropsTable)
+        cs_layout.addWidget(cs_props_group)
+
+        cs_layout.addStretch()
+        self.tabs.insertTab(3, cs_tab, "Cross Sections") # Insert before BCs
+
+
         # Tab 4: Boundary Conditions
         bc_tab = QtWidgets.QWidget()
         bc_layout = QtWidgets.QVBoxLayout(bc_tab)
 
         bc_btn_layout = QtWidgets.QHBoxLayout()
-        self.addBCBtn = QtWidgets.QPushButton("Add Boundary Condition")
+        self.addBCBtn = QtWidgets.QPushButton("Add")
         self.addBCBtn.clicked.connect(self.addBC)
-        self.removeBCBtn = QtWidgets.QPushButton("Remove Boundary Condition")
+        self.editBCBtn = QtWidgets.QPushButton("Edit")
+        # self.editBCBtn.clicked.connect(self.editBC) # Placeholder for future
+        self.removeBCBtn = QtWidgets.QPushButton("Remove")
         self.removeBCBtn.clicked.connect(self.removeBC)
         bc_btn_layout.addWidget(self.addBCBtn)
+        bc_btn_layout.addWidget(self.editBCBtn)
         bc_btn_layout.addWidget(self.removeBCBtn)
         bc_layout.addLayout(bc_btn_layout)
 
@@ -212,6 +260,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             print(f"Error loading material templates: {e}")
             self.material_templates = []
 
+    def loadCrossSectionTemplates(self):
+        """Loads cross section definitions from the JSON file."""
+        try:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            json_path = os.path.join(plugin_dir, "OOFEMCrossSections.json")
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                self.cs_templates = data.get("cross_sections", [])
+        except Exception as e:
+            print(f"Error loading cross section templates: {e}")
+            self.cs_templates = []
+
     def loadBCTemplates(self):
         """Loads boundary condition definitions from the JSON file."""
         try:
@@ -270,6 +330,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["element_mapping"] = DEFAULT_ELEMENT_MAP.copy()
         if "materials" not in self.state:
             self.state["materials"] = []
+        if "cross_sections" not in self.state:
+            self.state["cross_sections"] = []
         if "analysis" not in self.state:
             # Set a default analysis if none is defined
             self.state["analysis"] = {
@@ -279,6 +341,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if "bcs" not in self.state:
             self.state["bcs"] = []
 
+        self.loadCrossSectionTemplates()
         self.loadAnalysisTemplates()
         self.loadMaterialTemplates()
         self.loadBCTemplates()
@@ -286,6 +349,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateAnalysis()
         self.populateElementMapping()
         self.populateMaterials()
+        self.populateCrossSections()
         self.populateBCs()
 
     # ---------------------------
@@ -442,7 +506,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             
             self.matTable.setItem(row, 0, name_item)
             self.matTable.setItem(row, 1, QtWidgets.QTableWidgetItem(mat_data.get("oofem_type", "")))
-            self.matTable.setItem(row, 2, QtWidgets.QTableWidgetItem(mat_data.get("assigned_group", "")))
         self._block_signals = False
         self.populateMaterialDetails() # Clear details pane if no selection
 
@@ -502,8 +565,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
     def addMaterial(self):
         """Opens a dialog to add a new material instance."""
-        mesh_groups = self.getMeshGroups()
-        new_mat_data = OOFEMMaterialDialog.run(self.material_templates, mesh_groups, parent=self)
+        new_mat_data = OOFEMMaterialDialog.run(self.material_templates, parent=self)
 
         if new_mat_data:
             # Add unique ID and default parameters
@@ -519,6 +581,27 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["materials"].append(new_mat_data)
             self.populateMaterials()
 
+    def editMaterial(self):
+        """Opens a dialog to edit the selected material instance."""
+        selected_items = self.matTable.selectedItems()
+        if not selected_items:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No material selected to edit.")
+            return
+
+        mat_id = selected_items[0].data(Qt.UserRole)
+        mat_data = next((m for m in self.state['materials'] if m.get('id') == mat_id), None)
+        if not mat_data: return
+
+        updated_data = OOFEMMaterialDialog.run(self.material_templates, existing_material=mat_data, parent=self)
+
+        if updated_data:
+            mat_data.update(updated_data)
+            self.populateMaterials()
+            for row in range(self.matTable.rowCount()):
+                if self.matTable.item(row, 0).data(Qt.UserRole) == mat_id:
+                    self.matTable.selectRow(row)
+                    break
+
     def removeMaterial(self):
         """Removes the selected material from the state."""
         selected_items = self.matTable.selectedItems()
@@ -529,6 +612,133 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         mat_id = selected_items[0].data(Qt.UserRole)
         self.state['materials'] = [m for m in self.state['materials'] if m.get('id') != mat_id]
         self.populateMaterials()
+
+    # ---------------------------
+    # Cross Sections
+    # ---------------------------
+    def populateCrossSections(self):
+        """Populates the main cross section table from the plugin state."""
+        self._block_signals = True
+        self.csTable.setRowCount(0)
+        # Create a quick lookup map for material names
+        mat_id_to_name = {m['id']: m.get('name', 'Unnamed') for m in self.state.get("materials", [])}
+
+        for cs_data in self.state.get("cross_sections", []):
+            row = self.csTable.rowCount()
+            self.csTable.insertRow(row)
+
+            name_item = QtWidgets.QTableWidgetItem(cs_data.get("name", "Unnamed"))
+            name_item.setData(Qt.UserRole, cs_data.get("id"))
+
+            material_name = mat_id_to_name.get(cs_data.get("material_id"), "INVALID/DELETED")
+
+            self.csTable.setItem(row, 0, name_item)
+            self.csTable.setItem(row, 1, QtWidgets.QTableWidgetItem(cs_data.get("oofem_type", "")))
+            self.csTable.setItem(row, 2, QtWidgets.QTableWidgetItem(material_name))
+            self.csTable.setItem(row, 3, QtWidgets.QTableWidgetItem(cs_data.get("assigned_group", "")))
+        self._block_signals = False
+        self.populateCrossSectionDetails()
+
+    def populateCrossSectionDetails(self):
+        """Populates the property editor based on the selected cross section."""
+        self._block_signals = True
+        self.csPropsTable.setRowCount(0)
+
+        selected_items = self.csTable.selectedItems()
+        if not selected_items:
+            self._block_signals = False
+            return
+
+        cs_id = selected_items[0].data(Qt.UserRole)
+        cs_data = next((cs for cs in self.state['cross_sections'] if cs['id'] == cs_id), None)
+        if not cs_data:
+            self._block_signals = False
+            return
+
+        template = next((t for t in self.cs_templates if t['oofem_name'] == cs_data['oofem_type']), None)
+        if not template:
+            self._block_signals = False
+            return
+
+        current_params = cs_data.get("params", {})
+        for param_def in template.get("params", []):
+            row = self.csPropsTable.rowCount()
+            self.csPropsTable.insertRow(row)
+
+            is_optional = param_def.get("optional", False)
+            display_name = param_def['name']
+            if is_optional: display_name += " (optional)"
+
+            name_item = QtWidgets.QTableWidgetItem(display_name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setData(Qt.UserRole, param_def['key'])
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
+            name_item.setData(Qt.UserRole + 2, is_optional)
+
+            value = current_params.get(param_def['key'], param_def.get('default', ''))
+            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
+
+            description = param_def.get("description")
+            if description:
+                name_item.setToolTip(description)
+                value_item.setToolTip(description)
+
+            self.csPropsTable.setItem(row, 0, name_item)
+            self.csPropsTable.setItem(row, 1, value_item)
+
+        self._block_signals = False
+
+    def addCrossSection(self):
+        """Opens a dialog to add a new cross section instance."""
+        mesh_groups = self.getMeshGroups()
+        materials = self.state.get("materials", [])
+        salome_types = self.state.get("element_mapping", {}).keys()
+        new_cs_data = OOFEMCrossSectionDialog.run(self.cs_templates, materials, mesh_groups, salome_types, parent=self)
+
+        if new_cs_data:
+            new_cs_data['id'] = str(uuid.uuid4())
+            new_cs_data['params'] = {}
+            template = next((t for t in self.cs_templates if t['oofem_name'] == new_cs_data['oofem_type']), None)
+            if template:
+                for p in template.get('params', []):
+                    if 'default' in p:
+                        new_cs_data['params'][p['key']] = p['default']
+            self.state["cross_sections"].append(new_cs_data)
+            self.populateCrossSections()
+
+    def editCrossSection(self):
+        """Opens a dialog to edit the selected cross section instance."""
+        selected_items = self.csTable.selectedItems()
+        if not selected_items:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No cross section selected to edit.")
+            return
+
+        cs_id = selected_items[0].data(Qt.UserRole)
+        cs_data = next((cs for cs in self.state['cross_sections'] if cs.get('id') == cs_id), None)
+        if not cs_data: return
+
+        mesh_groups = self.getMeshGroups()
+        materials = self.state.get("materials", [])
+        salome_types = self.state.get("element_mapping", {}).keys()
+        
+        updated_data = OOFEMCrossSectionDialog.run(self.cs_templates, materials, mesh_groups, salome_types, existing_cs=cs_data, parent=self)
+
+        if updated_data:
+            cs_data.update(updated_data)
+            self.populateCrossSections()
+            for row in range(self.csTable.rowCount()):
+                if self.csTable.item(row, 0).data(Qt.UserRole) == cs_id:
+                    self.csTable.selectRow(row)
+                    break
+
+    def removeCrossSection(self):
+        """Removes the selected cross section from the state."""
+        selected_items = self.csTable.selectedItems()
+        if not selected_items:
+            return
+        cs_id = selected_items[0].data(Qt.UserRole)
+        self.state['cross_sections'] = [cs for cs in self.state['cross_sections'] if cs.get('id') != cs_id]
+        self.populateCrossSections()
 
     # ---------------------------
     # Boundary Conditions
@@ -655,6 +865,37 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             return
         analysis_data['params'][param_key] = new_value
 
+    def onCrossSectionPropertyChanged(self, row, column):
+        """Updates the state when a cross section property value is changed."""
+        if self._block_signals or column != 1:
+            return
+
+        selected_items = self.csTable.selectedItems()
+        if not selected_items: return
+
+        cs_id = selected_items[0].data(Qt.UserRole)
+        cs_data = next((cs for cs in self.state['cross_sections'] if cs['id'] == cs_id), None)
+        if not cs_data: return
+
+        key_item = self.csPropsTable.item(row, 0)
+        value_item = self.csPropsTable.item(row, 1)
+        param_key = key_item.data(Qt.UserRole)
+        param_type = key_item.data(Qt.UserRole + 1)
+        is_optional = key_item.data(Qt.UserRole + 2)
+        value_text = value_item.text().strip()
+
+        if is_optional and not value_text:
+            if param_key in cs_data['params']:
+                del cs_data['params'][param_key]
+            return
+
+        try:
+            new_value = self._parse_param_value(value_text, param_type)
+        except (ValueError, TypeError):
+            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
+            return
+        cs_data['params'][param_key] = new_value
+
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
         if self._block_signals or column != 1:
@@ -778,14 +1019,32 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if not filename:
                 return  # User cancelled
 
+            # Get study info to pass to the exporter for the file header
+            study_name = "Unknown"
+            study_path = ""
+            if self.study:
+                # Get study name: Try method first, then attribute
+                if hasattr(self.study, "GetStudyName"):
+                    study_name = self.study.GetStudyName()
+                elif hasattr(self.study, "Name"):
+                    study_name = self.study.Name
+                # Get study path: Try method first, then attribute
+                if hasattr(self.study, "GetStudyPath"):
+                    study_path = self.study.GetStudyPath()
+                elif hasattr(self.study, "URL"):
+                    study_path = self.study.URL
+
             # Create and run the exporter
             exporter = OOFEMExporter(
                 mesh,
                 self.state.get("element_mapping", {}),
                 self.state.get("materials", []),
+                self.state.get("cross_sections", []),
                 self.state.get("bcs", []),
                 self.bc_templates,
-                self.state.get("analysis", {})
+                self.state.get("analysis", {}),
+                study_name,
+                study_path
             )
             exporter.export(filename)
 
