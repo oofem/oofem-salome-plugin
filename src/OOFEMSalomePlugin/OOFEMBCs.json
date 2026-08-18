@@ -15,7 +15,7 @@
       "apply_to": "nodes",
       "params": [
         {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (1=x, 2=y, 3=z)."},
-        {"key": "Components", "name": "Components", "type": "floatarray  ", "default": "", "description": "Nodal Load/Flux DOF values."}
+        {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Nodal Load/Flux DOF values."}
       ]
     },
     {
